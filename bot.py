@@ -6,11 +6,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 async def start(update, context):
     await update.message.reply_text("Bot aktif kral ✅")
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.run_polling()
 def main():
-   app = ApplicationBuilder().token(BOT_TOKEN).build()
+   app =
+ApplicationBuilder().token(BOT_TOKEN).
+build()
+app.
 app.add_handler(CommandHandler("start", start))
 print("Bot çalışıyor...")
 app.run_polling()
