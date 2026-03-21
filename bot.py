@@ -8,7 +8,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot aktif kral ✅")
 
 async def analiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mesaj = "🔥 GÜNÜN MAÇLARI\n\n"
+    mesaj = "🔥 GÜNÜN MAÇLARI:\n\n"
     maclar = [
         "Fenerbahçe vs Kasımpaşa",
         "Galatasaray vs Rizespor",
