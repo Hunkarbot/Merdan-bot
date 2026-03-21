@@ -7,10 +7,8 @@ async def start(update, context):
     await update.message.reply_text("Bot aktif kral ✅")
 
 def main():
-   app =
-ApplicationBuilder().token(BOT_TOKEN).
-build()
-app.
+    app=
+ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 print("Bot çalışıyor...")
 app.run_polling()
