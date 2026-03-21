@@ -9,3 +9,11 @@ async def start(update, context):
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.run_polling()
+def main():
+   app = ApplicationBuilder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+print("Bot çalışıyor...")
+app.run_polling()
+
+if __name__ == "__main__":
+   main() 
