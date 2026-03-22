@@ -1,3 +1,6 @@
+import asyncio
+asyncio.set_event_loop(asyncio.new_event_loop())
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
