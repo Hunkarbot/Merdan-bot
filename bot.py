@@ -3,8 +3,8 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BOT_TOKEN = os.getenv("8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
-API_KEY = os.getenv("7fb5f8cb38a416199abc19415a485fa7"
+BOT_TOKEN ="8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
+API_KEY = "7fb5f8cb38a416199abc19415a485fa7"
 
 BASE_URL = "https://v3.football.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
