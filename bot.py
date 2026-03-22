@@ -3,36 +3,38 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BOT_TOKEN =  "8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
-API_KEY = os.getenv("API_KEY")
-
-HEADERS = {
-    "x-apisports-key": API_KEY
-}
+BOT_TOKEN = os.getenv("8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
+API_KEY = os.getenv("db7395bc22c960b4acc60f71083c8f19"
+BASE_URL = "https://v3.football.api-sports.io"
+HEADERS = {"x-apisports-key": API_KEY}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot aktif kral 👑\n"
+        "Bot aktif kral 👑\n\n"
         "Komutlar:\n"
         "/start\n"
         "/maclar"
     )
 
 
-def get_matches():
-    url = "https://v3.football.api-sports.io/fixtures?next=20"
-    r = requests.get(url, headers=HEADERS, timeout=20)
+def api_get(path: str, params: dict):
+    r = requests.get(
+        f"{BASE_URL}/{path}",
+        headers=HEADERS,
+        params=params,
+        timeout=20
+    )
     r.raise_for_status()
-    data = r.json()
-    return data.get("response", [])
+    return r.json().get("response", [])
 
 
-def get_form(team_id: int):
-    url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    matches = r.json().get("response", [])
+def get_next_matches():
+    return api_get("fixtures", {"next": 20})
+
+
+def get_last5_form(team_id: int):
+    matches = api_get("fixtures", {"team": team_id, "last": 5})
 
     wins = 0
     losses = 0
@@ -40,9 +42,22 @@ def get_form(team_id: int):
     conceded = 0
 
     for m in matches:
-        is_home = m["teams"]["home"]["id"] == team_id
-        gf = m["goals"]["home"] if is_home else m["goals"]["away"]
-        ga = m["goals"]["away"] if is_home else m["goals"]["home"]
+        home_id = m["teams"]["home"]["id"]
+        away_id = m["teams"]["away"]["id"]
+        home_goals = m["goals"]["home"]
+        away_goals = m["goals"]["away"]
+
+        if team_id == home_id:
+            gf = home_goals
+            ga = away_goals
+        else:
+            gf = away_goals
+            ga = home_goals
+
+        if gf is None:
+            gf = 0
+        if ga is None:
+            ga = 0
 
         if gf > ga:
             wins += 1
@@ -54,68 +69,93 @@ def get_form(team_id: int):
         if ga > 0:
             conceded += 1
 
-    return wins, losses, scored, conceded
+    return {
+        "wins": wins,
+        "losses": losses,
+        "scored": scored,
+        "conceded": conceded,
+    }
 
 
-def analyze_match(match):
-    home = match["teams"]["home"]["name"]
-    away = match["teams"]["away"]["name"]
+def analyze_match(match: dict):
+    home_name = match["teams"]["home"]["name"]
+    away_name = match["teams"]["away"]["name"]
     home_id = match["teams"]["home"]["id"]
     away_id = match["teams"]["away"]["id"]
 
-    hw, hl, hs, hc = get_form(home_id)
-    aw, al, a_s, ac = get_form(away_id)
+    home_form = get_last5_form(home_id)
+    away_form = get_last5_form(away_id)
 
-    # BTTS: iki takım da son 5 maçta gol atmış ve gol yemiş
-    if hs == 5 and hc == 5 and a_s == 5 and ac == 5:
-        return ("BTTS", f"🟢 BTTS → {home} vs {away}")
+    # BTTS 5/5
+    if (
+        home_form["scored"] == 5
+        and home_form["conceded"] == 5
+        and away_form["scored"] == 5
+        and away_form["conceded"] == 5
+    ):
+        return {
+            "type": "BTTS",
+            "text": f"🟢 BTTS → {home_name} vs {away_name}"
+        }
 
-    # Favori: takım 4/5 kazanmış, rakip 4/5 kaybetmiş
-    if hw >= 4 and al >= 4:
-        return ("FAVORI", f"💀 FAVORİ → {home} kazanır")
-    if aw >= 4 and hl >= 4:
-        return ("FAVORI", f"💀 FAVORİ → {away} kazanır")
+    # Favori 4/5 vs 4/5
+    if home_form["wins"] >= 4 and away_form["losses"] >= 4:
+        return {
+            "type": "FAVORI",
+            "text": f"💀 FAVORİ → {home_name} kazanır"
+        }
 
-    return (None, None)
+    if away_form["wins"] >= 4 and home_form["losses"] >= 4:
+        return {
+            "type": "FAVORI",
+            "text": f"💀 FAVORİ → {away_name} kazanır"
+        }
+
+    return None
 
 
 async def maclar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        if not BOT_TOKEN:
+            await update.message.reply_text("BOT_TOKEN eksik kral.")
+            return
+
         if not API_KEY:
             await update.message.reply_text("API_KEY eksik kral.")
             return
 
-        matches = get_matches()
+        fixtures = get_next_matches()
 
-        if not matches:
+        if not fixtures:
             await update.message.reply_text("Maç bulunamadı kral.")
             return
 
         btts_list = []
-        fav_list = []
+        favori_list = []
 
-        for match in matches:
-            kind, text = analyze_match(match)
-            if kind == "BTTS":
-                btts_list.append(text)
-            elif kind == "FAVORI":
-                fav_list.append(text)
+        for match in fixtures:
+            result = analyze_match(match)
+            if result:
+                if result["type"] == "BTTS":
+                    btts_list.append(result["text"])
+                elif result["type"] == "FAVORI":
+                    favori_list.append(result["text"])
 
         message = "🔥 GÜNLÜK SİSTEM 🔥\n\n"
 
         if btts_list:
             message += "🟢 BTTS ADAYLARI\n"
-            for item in btts_list[:3]:
+            for item in btts_list[:5]:
                 message += item + "\n"
             message += "\n"
 
-        if fav_list:
+        if favori_list:
             message += "💀 FAVORİ ADAYLARI\n"
-            for item in fav_list[:3]:
+            for item in favori_list[:5]:
                 message += item + "\n"
 
-        if not btts_list and not fav_list:
-            message += "Bugün filtreye uyan maç çıkmadı kral."
+        if not btts_list and not favori_list:
+            message += "Bugün filtreye uyan maç yok kral."
 
         await update.message.reply_text(message)
 
@@ -125,10 +165,8 @@ async def maclar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("maclar", maclar))
-
     print("Bot calisiyor kral...")
     app.run_polling(drop_pending_updates=True)
 
