@@ -4,7 +4,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 BOT_TOKEN = os.getenv("8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
-API_KEY = os.getenv("db7395bc22c960b4acc60f71083c8f19"
+API_KEY = os.getenv("7fb5f8cb38a416199abc19415a485fa7"
+
 BASE_URL = "https://v3.football.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 
@@ -23,10 +24,11 @@ def api_get(path: str, params: dict):
         f"{BASE_URL}/{path}",
         headers=HEADERS,
         params=params,
-        timeout=20
+        timeout=20,
     )
     r.raise_for_status()
-    return r.json().get("response", [])
+    data = r.json()
+    return data.get("response", [])
 
 
 def get_next_matches():
@@ -95,20 +97,20 @@ def analyze_match(match: dict):
     ):
         return {
             "type": "BTTS",
-            "text": f"🟢 BTTS → {home_name} vs {away_name}"
+            "text": f"🟢 BTTS → {home_name} vs {away_name}",
         }
 
     # Favori 4/5 vs 4/5
     if home_form["wins"] >= 4 and away_form["losses"] >= 4:
         return {
             "type": "FAVORI",
-            "text": f"💀 FAVORİ → {home_name} kazanır"
+            "text": f"💀 FAVORİ → {home_name} kazanır",
         }
 
     if away_form["wins"] >= 4 and home_form["losses"] >= 4:
         return {
             "type": "FAVORI",
-            "text": f"💀 FAVORİ → {away_name} kazanır"
+            "text": f"💀 FAVORİ → {away_name} kazanır",
         }
 
     return None
