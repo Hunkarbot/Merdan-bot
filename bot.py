@@ -3,7 +3,7 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-API_KEY = "db7395bc22c960b4acc60f71083c8f19"
+API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
 BOT_TOKEN = "8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
 
 HEADERS = {"x-apisports-key": API_KEY}
