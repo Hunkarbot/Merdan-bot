@@ -4,8 +4,8 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BOT_TOKEN = os.getenv("8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
-API_KEY = os.getenv("db7395bc22c960b4acc60f71083c8f19"
+BOT_TOKEN = "8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
+API_KEY =  "db7395bc22c960b4acc60f71083c8f19"
 
 HIGH_SCORING_LEAGUES = [39, 78, 61, 135, 140]  
 # Premier League, Bundesliga, Ligue1, Serie A, La Liga
