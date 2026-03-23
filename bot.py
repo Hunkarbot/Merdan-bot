@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 BOT_TOKEN =  "8747036915:AAG9c4MRd6Fx-EDQOCpcxmFNGdRCAu995GE"
-API_KEY =  " db7395bc22c960b4acc60f71083c8f19"
+API_KEY = "db7395bc22c960b4acc60f71083c8f19"
 
 BASE_URL = "https://v3.football.api-sports.io"
 
