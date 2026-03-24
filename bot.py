@@ -306,10 +306,6 @@ def analyze_matches():
         home_stats = analyze_team_stats(home_id, home_last5)
         away_stats = analyze_team_stats(away_id, away_last5)
 
-        if not home_stats or not away_stats:
-            print("Stats oluşturulamadı, maç elendi:", home_team, "vs", away_team)
-            continue
-
         best_market, all_scores = choose_best_market(home_stats, away_stats)
         market_name, market_score = best_market
 
