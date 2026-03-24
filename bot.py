@@ -1,175 +1,84 @@
-import os
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import requests
-import datetime
-import time
-import schedule
+from datetime import datetime
 
 API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
 BOT_TOKEN = "8747036915:AAES-UKrjW3xU891kX9s36sNn5gdaNlgaz8"
-CHAT_ID = os.getenv("CHAT_ID")
 
 BASE_URL = "https://v3.football.api-sports.io"
 
-HEADERS = {
+headers = {
     "x-apisports-key": API_KEY
 }
 
-# Sadece gollü ligler
-GOLLU_LIGLER = [
-    "Eredivisie",
-    "Bundesliga",
-    "Belgium",
-    "MLS",
-    "A-League",
-    "Austria",
-    "Switzerland",
-    "Denmark",
-    "Czech",
-    "Norway",
-    "Sweden"
-]
+# Gollü ligler
+GOLLU_LIGLER = ["Eredivisie", "Bundesliga", "Belgium", "MLS", "A-League"]
 
-# Takım verisini tekrar tekrar çekmemek için hafıza
-team_cache = {}
-
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": text
-    }
-    try:
-        requests.post(url, data=data, timeout=20)
-    except Exception as e:
-        print("Telegram gönderme hatası:", e)
-
-def get_today():
-    return datetime.datetime.now().strftime("%Y-%m-%d")
-
-def get_today_matches():
-    url = f"{BASE_URL}/fixtures"
-    params = {"date": get_today()}
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=30)
-        data = r.json()
-        return data.get("response", [])
-    except Exception as e:
-        print("Bugünkü maçlar alınamadı:", e)
-        return []
-
+# Son 5 maç verisi
 def get_last5(team_id):
-    if team_id in team_cache:
-        return team_cache[team_id]
+    url = f"{BASE_URL}/fixtures?team={team_id}&last=5"
+    res = requests.get(url, headers=headers).json()
+    return res.get("response", [])
 
-    url = f"{BASE_URL}/fixtures"
-    params = {
-        "team": team_id,
-        "last": 5
-    }
+# BTTS kontrol (5/5 kuralı)
+def btts_kontrol(maclar):
+    sayac = 0
+    for mac in maclar:
+        ev = mac["goals"]["home"]
+        dep = mac["goals"]["away"]
+        if ev > 0 and dep > 0:
+            sayac += 1
+    return sayac == 5
 
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=30)
-        data = r.json()
-        matches = data.get("response", [])
-        team_cache[team_id] = matches
-        time.sleep(1.2)  # API koruma
-        return matches
-    except Exception as e:
-        print(f"Takım {team_id} son 5 maç hatası:", e)
-        return []
+# ANALİZ
+def analiz():
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = f"{BASE_URL}/fixtures?date={today}"
+    res = requests.get(url, headers=headers).json()
+    maclar = res.get("response", [])
 
-def team_btts_5of5(team_id, matches):
-    if len(matches) < 5:
-        return False
+    secilen = []
 
-    count = 0
+    for mac in maclar:
+        lig = mac["league"]["name"]
 
-    for m in matches:
-        home_id = m["teams"]["home"]["id"]
-        away_id = m["teams"]["away"]["id"]
-        home_goals = m["goals"]["home"]
-        away_goals = m["goals"]["away"]
-
-        if home_goals is None or away_goals is None:
-            return False
-
-        # Takım hem gol atmış hem gol yemiş olmalı
-        if team_id == home_id:
-            scored = home_goals
-            conceded = away_goals
-        elif team_id == away_id:
-            scored = away_goals
-            conceded = home_goals
-        else:
-            return False
-
-        if scored > 0 and conceded > 0:
-            count += 1
-
-    return count == 5
-
-def is_gollu_lig(league_name):
-    league_lower = league_name.lower()
-    for lig in GOLLU_LIGLER:
-        if lig.lower() in league_lower:
-            return True
-    return False
-
-def analyze_btts():
-    global team_cache
-    team_cache = {}
-
-    send_telegram("🔥 Günün BTTS taraması başladı...")
-
-    matches = get_today_matches()
-    results = []
-
-    for m in matches:
-        league_name = m["league"]["name"]
-        country = m["league"]["country"]
-        league_text = f"{country} - {league_name}"
-
-        if not is_gollu_lig(league_name) and not is_gollu_lig(country):
+        if lig not in GOLLU_LIGLER:
             continue
 
-        home_team = m["teams"]["home"]["name"]
-        away_team = m["teams"]["away"]["name"]
-        home_id = m["teams"]["home"]["id"]
-        away_id = m["teams"]["away"]["id"]
-        match_time = m["fixture"]["date"]
+        home = mac["teams"]["home"]
+        away = mac["teams"]["away"]
 
-        home_last5 = get_last5(home_id)
-        away_last5 = get_last5(away_id)
+        home_last5 = get_last5(home["id"])
+        away_last5 = get_last5(away["id"])
 
-        home_ok = team_btts_5of5(home_id, home_last5)
-        away_ok = team_btts_5of5(away_id, away_last5)
+        if len(home_last5) < 5 or len(away_last5) < 5:
+            continue
 
-        if home_ok and away_ok:
-            dt = datetime.datetime.fromisoformat(match_time.replace("Z", "+00:00"))
-            saat = dt.strftime("%d.%m.%Y %H:%M")
+        if btts_kontrol(home_last5) and btts_kontrol(away_last5):
+            secilen.append(f"{home['name']} vs {away['name']}")
 
-            results.append(
-                f"✅ {home_team} - {away_team}\n"
-                f"🕒 {saat}\n"
-                f"🏆 {league_text}\n"
-                f"📌 Market: BTTS"
-            )
+    return secilen
 
-        if len(results) >= 3:
-            break
+# /start KOMUTU
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔍 Analiz yapılıyor...")
 
-    if results:
-        msg = "🔥 BUGÜNÜN EN SAĞLAM BTTS MAÇLARI\n\n" + "\n\n".join(results)
-    else:
-        msg = "❌ Bugün 5/5 kuralına uyan sağlam BTTS maçı bulunamadı."
+    maclar = analiz()
 
-    send_telegram(msg)
+    if not maclar:
+        await update.message.reply_text("❌ Uygun BTTS maçı bulunamadı")
+        return
 
-# Her gün sabah 09:00
-schedule.every().day.at("09:00").do(analyze_btts)
+    mesaj = "🔥 BUGÜNÜN BTTS MAÇLARI:\n\n"
+    for m in maclar:
+        mesaj += f"• {m}\n"
 
-print("Bot çalışıyor... Sadece BTTS sistemi aktif.")
+    await update.message.reply_text(mesaj)
 
-while True:
-    schedule.run_pending()
-    time.sleep(30)
+# BOT
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+
+app.run_polling()
