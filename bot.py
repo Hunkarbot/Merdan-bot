@@ -1,4 +1,4 @@
-import os
+import os 
 import time
 import requests
 from datetime import datetime, timedelta
@@ -42,6 +42,7 @@ def get_dates():
 
 def safe_request(url: str, params: dict):
     try:
+        print("API istek:", url, params)
         res = requests.get(url, headers=HEADERS, params=params, timeout=30)
         data = res.json()
         time.sleep(1)  # API koruma
@@ -52,6 +53,7 @@ def safe_request(url: str, params: dict):
 
 def fetch_fixtures_by_date(date_str: str):
     if date_str in fixture_cache:
+        print("Cache fixtures kullanıldı:", date_str)
         return fixture_cache[date_str]
 
     url = f"{BASE_URL}/fixtures"
@@ -59,13 +61,19 @@ def fetch_fixtures_by_date(date_str: str):
     data = safe_request(url, params)
     matches = data.get("response", [])
     fixture_cache[date_str] = matches
+    print(f"{date_str} için çekilen maç sayısı:", len(matches))
     return matches
 
 def get_all_relevant_matches():
     today, tomorrow = get_dates()
+    print("Bugün tarihi:", today)
+    print("Yarın tarihi:", tomorrow)
 
     today_matches = fetch_fixtures_by_date(today)
     tomorrow_matches = fetch_fixtures_by_date(tomorrow)
+
+    print("Bugün maç sayısı:", len(today_matches))
+    print("Yarın maç sayısı:", len(tomorrow_matches))
 
     all_matches = today_matches + tomorrow_matches
     filtered = []
@@ -73,16 +81,22 @@ def get_all_relevant_matches():
     for m in all_matches:
         league_name = m["league"]["name"]
         country = m["league"]["country"]
+        home_team = m["teams"]["home"]["name"]
+        away_team = m["teams"]["away"]["name"]
 
         if not is_gollu_lig(league_name, country):
+            print("Lig filtresinden elendi:", home_team, "vs", away_team, "|", country, "-", league_name)
             continue
 
+        print("Lig filtresini geçti:", home_team, "vs", away_team, "|", country, "-", league_name)
         filtered.append(m)
 
+    print("Filtre sonrası maç sayısı:", len(filtered))
     return filtered
 
 def get_last5(team_id: int):
     if team_id in team_cache:
+        print("Cache takım kullanıldı:", team_id)
         return team_cache[team_id]
 
     url = f"{BASE_URL}/fixtures"
@@ -90,10 +104,12 @@ def get_last5(team_id: int):
     data = safe_request(url, params)
     matches = data.get("response", [])
     team_cache[team_id] = matches
+    print(f"Takım {team_id} son 5 maç sayısı:", len(matches))
     return matches
 
 def analyze_team_stats(team_id: int, matches: list):
     if len(matches) < 5:
+        print("Yetersiz son 5 verisi:", team_id, "->", len(matches))
         return None
 
     scored_total = 0
@@ -113,6 +129,7 @@ def analyze_team_stats(team_id: int, matches: list):
         away_goals = m["goals"]["away"]
 
         if home_goals is None or away_goals is None:
+            print("Gol verisi eksik:", team_id)
             return None
 
         if team_id == home_id:
@@ -122,6 +139,7 @@ def analyze_team_stats(team_id: int, matches: list):
             scored = away_goals
             conceded = home_goals
         else:
+            print("Takım maç içinde bulunamadı:", team_id)
             return None
 
         total_goals = home_goals + away_goals
@@ -146,7 +164,7 @@ def analyze_team_stats(team_id: int, matches: list):
         else:
             losses += 1
 
-    return {
+    stats = {
         "avg_scored": scored_total / 5,
         "avg_conceded": conceded_total / 5,
         "scored_count": scored_count,
@@ -157,6 +175,9 @@ def analyze_team_stats(team_id: int, matches: list):
         "draws": draws,
         "losses": losses
     }
+
+    print(f"Team {team_id} stats:", stats)
+    return stats
 
 def score_btts(home_stats, away_stats):
     score = 0
@@ -221,12 +242,10 @@ def score_ms(home_stats, away_stats):
     home_score = 0
     away_score = 0
 
-    # Ev sahibi
     home_score += home_stats["wins"] * 12
     home_score += max(0, (home_stats["avg_scored"] - away_stats["avg_conceded"])) * 10
     home_score += max(0, (away_stats["losses"] - home_stats["losses"])) * 4
 
-    # Deplasman
     away_score += away_stats["wins"] * 12
     away_score += max(0, (away_stats["avg_scored"] - home_stats["avg_conceded"])) * 10
     away_score += max(0, (home_stats["losses"] - away_stats["losses"])) * 4
@@ -257,7 +276,7 @@ def choose_best_market(home_stats, away_stats):
 def format_match_time(iso_time: str):
     try:
         dt = datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
-        dt = dt + timedelta(hours=1)  # Almanya için yaklaşık düzeltme
+        dt = dt + timedelta(hours=1)
         return dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return iso_time
@@ -268,6 +287,8 @@ def analyze_matches():
     fixture_cache = {}
 
     matches = get_all_relevant_matches()
+    print("Analize giren maç sayısı:", len(matches))
+
     results = []
 
     for m in matches:
@@ -279,17 +300,25 @@ def analyze_matches():
         country = m["league"]["country"]
         match_time = format_match_time(m["fixture"]["date"])
 
+        print("Analiz edilen maç:", home_team, "vs", away_team)
+
         home_last5 = get_last5(home_id)
         away_last5 = get_last5(away_id)
+
+        print("Last5 sayıları:", home_team, len(home_last5), "|", away_team, len(away_last5))
 
         home_stats = analyze_team_stats(home_id, home_last5)
         away_stats = analyze_team_stats(away_id, away_last5)
 
         if not home_stats or not away_stats:
+            print("Stats oluşturulamadı, maç elendi:", home_team, "vs", away_team)
             continue
 
         best_market, all_scores = choose_best_market(home_stats, away_stats)
         market_name, market_score = best_market
+
+        print("Market sonuçları:", home_team, "vs", away_team, "|", all_scores)
+        print("Seçilen market:", market_name, "| Puan:", market_score)
 
         results.append({
             "match": f"{home_team} vs {away_team}",
@@ -300,7 +329,14 @@ def analyze_matches():
             "all_scores": all_scores
         })
 
+        print("Listeye eklendi:", home_team, "vs", away_team, "|", market_name, "|", market_score)
+
     results.sort(key=lambda x: x["score"], reverse=True)
+    print("Toplam sonuç sayısı:", len(results))
+
+    if len(results) > 0:
+        print("İlk 5 sonuç:", results[:5])
+
     return results[:5]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -337,4 +373,4 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    main()        
+    main()
