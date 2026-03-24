@@ -364,5 +364,5 @@ def main():
     print("Bot aktif. /start komutu bekleniyor...")
           
 app.run_polling()
-if __name__ == "__main__"
+if __name__ == "__main__":
     main()
