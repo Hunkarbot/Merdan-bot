@@ -84,10 +84,6 @@ def get_all_relevant_matches():
         home_team = m["teams"]["home"]["name"]
         away_team = m["teams"]["away"]["name"]
 
-        if not is_gollu_lig(league_name, country):
-            print("Lig filtresinden elendi:", home_team, "vs", away_team, "|", country, "-", league_name)
-            continue
-
         print("Lig filtresini geçti:", home_team, "vs", away_team, "|", country, "-", league_name)
         filtered.append(m)
 
