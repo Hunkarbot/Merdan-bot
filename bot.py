@@ -362,7 +362,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
 
     print("Bot aktif. /start komutu bekleniyor...")
-app.run_polling(drop_pending_updates=True, close_loop=False)
-
-if __name__ == "__main__":
+          
+app.run_polling()
+if __name__ == "__main__"
     main()
