@@ -291,7 +291,7 @@ def analyze_matches():
         best_market, all_scores = choose_best_market(home_stats, away_stats)
         market_name, market_score = best_market
 
-        if market_score < 60:
+        if market_score < 50:
             continue
 
         results.append({
