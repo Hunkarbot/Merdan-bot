@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from datetime import datetime, timedelta
 from telegram import Update
@@ -25,7 +26,9 @@ GOLLU_LIGLER = [
     "Czech"
 ]
 
+# API koruma ve hafıza
 team_cache = {}
+fixture_cache = {}
 
 def is_gollu_lig(league_name: str, country_name: str) -> bool:
     text = f"{country_name} {league_name}".lower()
@@ -37,16 +40,26 @@ def get_dates():
     tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     return today, tomorrow
 
-def fetch_fixtures_by_date(date_str: str):
-    url = f"{BASE_URL}/fixtures"
-    params = {"date": date_str}
+def safe_request(url: str, params: dict):
     try:
         res = requests.get(url, headers=HEADERS, params=params, timeout=30)
         data = res.json()
-        return data.get("response", [])
+        time.sleep(1)  # API koruma
+        return data
     except Exception as e:
-        print("Fixture çekme hatası:", e)
-        return []
+        print("API hatası:", e)
+        return {}
+
+def fetch_fixtures_by_date(date_str: str):
+    if date_str in fixture_cache:
+        return fixture_cache[date_str]
+
+    url = f"{BASE_URL}/fixtures"
+    params = {"date": date_str}
+    data = safe_request(url, params)
+    matches = data.get("response", [])
+    fixture_cache[date_str] = matches
+    return matches
 
 def get_all_relevant_matches():
     today, tomorrow = get_dates()
@@ -54,20 +67,16 @@ def get_all_relevant_matches():
     today_matches = fetch_fixtures_by_date(today)
     tomorrow_matches = fetch_fixtures_by_date(tomorrow)
 
-    # bugün + yarın birleşsin
     all_matches = today_matches + tomorrow_matches
     filtered = []
 
     for m in all_matches:
-        fixture_date = m["fixture"]["date"]
         league_name = m["league"]["name"]
         country = m["league"]["country"]
 
-        # yalnızca gollü ligler
         if not is_gollu_lig(league_name, country):
             continue
 
-        # bugün ve yarın gece maçlarını dahil ediyoruz
         filtered.append(m)
 
     return filtered
@@ -78,15 +87,10 @@ def get_last5(team_id: int):
 
     url = f"{BASE_URL}/fixtures"
     params = {"team": team_id, "last": 5}
-    try:
-        res = requests.get(url, headers=HEADERS, params=params, timeout=30)
-        data = res.json()
-        matches = data.get("response", [])
-        team_cache[team_id] = matches
-        return matches
-    except Exception as e:
-        print(f"Son 5 maç hatası {team_id}:", e)
-        return []
+    data = safe_request(url, params)
+    matches = data.get("response", [])
+    team_cache[team_id] = matches
+    return matches
 
 def analyze_team_stats(team_id: int, matches: list):
     if len(matches) < 5:
@@ -94,8 +98,8 @@ def analyze_team_stats(team_id: int, matches: list):
 
     scored_total = 0
     conceded_total = 0
-    btts_scored_count = 0
-    btts_conceded_count = 0
+    scored_count = 0
+    conceded_count = 0
     over25_count = 0
     under25_count = 0
     wins = 0
@@ -111,8 +115,6 @@ def analyze_team_stats(team_id: int, matches: list):
         if home_goals is None or away_goals is None:
             return None
 
-        total_goals = home_goals + away_goals
-
         if team_id == home_id:
             scored = home_goals
             conceded = away_goals
@@ -122,15 +124,17 @@ def analyze_team_stats(team_id: int, matches: list):
         else:
             return None
 
+        total_goals = home_goals + away_goals
+
         scored_total += scored
         conceded_total += conceded
 
         if scored > 0:
-            btts_scored_count += 1
+            scored_count += 1
         if conceded > 0:
-            btts_conceded_count += 1
+            conceded_count += 1
 
-        if total_goals > 2.5:
+        if total_goals >= 3:
             over25_count += 1
         else:
             under25_count += 1
@@ -145,8 +149,8 @@ def analyze_team_stats(team_id: int, matches: list):
     return {
         "avg_scored": scored_total / 5,
         "avg_conceded": conceded_total / 5,
-        "scored_count": btts_scored_count,
-        "conceded_count": btts_conceded_count,
+        "scored_count": scored_count,
+        "conceded_count": conceded_count,
         "over25_count": over25_count,
         "under25_count": under25_count,
         "wins": wins,
@@ -217,12 +221,12 @@ def score_ms(home_stats, away_stats):
     home_score = 0
     away_score = 0
 
-    # Ev sahibi kazanır puanı
+    # Ev sahibi
     home_score += home_stats["wins"] * 12
     home_score += max(0, (home_stats["avg_scored"] - away_stats["avg_conceded"])) * 10
     home_score += max(0, (away_stats["losses"] - home_stats["losses"])) * 4
 
-    # Deplasman kazanır puanı
+    # Deplasman
     away_score += away_stats["wins"] * 12
     away_score += max(0, (away_stats["avg_scored"] - home_stats["avg_conceded"])) * 10
     away_score += max(0, (home_stats["losses"] - away_stats["losses"])) * 4
@@ -253,15 +257,15 @@ def choose_best_market(home_stats, away_stats):
 def format_match_time(iso_time: str):
     try:
         dt = datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
-        # Almanya için yaklaşık +1 ekliyoruz
-        dt = dt + timedelta(hours=1)
+        dt = dt + timedelta(hours=1)  # Almanya için yaklaşık düzeltme
         return dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return iso_time
 
 def analyze_matches():
-    global team_cache
+    global team_cache, fixture_cache
     team_cache = {}
+    fixture_cache = {}
 
     matches = get_all_relevant_matches()
     results = []
@@ -285,10 +289,8 @@ def analyze_matches():
             continue
 
         best_market, all_scores = choose_best_market(home_stats, away_stats)
-
         market_name, market_score = best_market
 
-        # Çok zayıf analizleri ele
         if market_score < 60:
             continue
 
@@ -313,10 +315,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Uygun maç bulunamadı.")
         return
 
-    mesaj = "🔥 BUGÜN + GECE EN İYİ MAÇLAR\n\n"
+    message = "🔥 BUGÜN + GECE EN İYİ MAÇLAR\n\n"
 
     for i, item in enumerate(results, start=1):
-        mesaj += (
+        message += (
             f"{i}️⃣ {item['match']}\n"
             f"🕒 {item['time']}\n"
             f"🏆 {item['league']}\n"
@@ -324,11 +326,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📊 Güven: {item['score']}/100\n\n"
         )
 
-    await update.message.reply_text(mesaj)
+    await update.message.reply_text(message)
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
+def main():
+    if not API_KEY or not BOT_TOKEN:
+        print("API_KEY veya BOT_TOKEN eksik.")
+        return
 
-print("Bot aktif. /start komutu bekleniyor...")
-app.run_polling()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
 
+    print("Bot aktif. /start komutu bekleniyor...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()        
