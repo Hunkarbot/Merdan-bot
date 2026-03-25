@@ -1,4 +1,4 @@
-import requests
+8import requests
 from datetime import datetime
 import pytz
 from telegram import Update
@@ -9,129 +9,91 @@ FOOTBALL_API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
 class MerdanBeyin:
     def __init__(self):
         self.headers = {
-            "x-rapidapi-key": FOOTBALL_API_KEY,
-            "x-rapidapi-host": "v3.football.api-sports.io",
+            "x-apisports-key": FOOTBALL_API_KEY
         }
-        self.tz = pytz.timezone("Europe/Istanbul")
-
-        self.GOLLU = ["Bundesliga", "Eredivisie", "A-League", "Regionalliga", "MLS", "Super League"]
-        self.KISIR = ["NPFL", "Egypt Premier League", "Segunda Division", "Ligue 2", "Serie B"]
-        self.GUC = ["Premier League", "La Liga", "Serie A", "Ligue 1", "Süper Lig", "Champions League"]
+        self.tz = pytz.timezone("Europe/Berlin")
 
     def veri_cek(self):
-        bugun = datetime.now(self.tz).strftime("%Y-%m-%d")
+        bugun = datetime.now(self.tz).strftime('%Y-%m-%d')
         url = "https://v3.football.api-sports.io/fixtures"
 
         try:
             res = requests.get(
                 url,
                 headers=self.headers,
-                params={"date": bugun},
-                timeout=20
+                params={
+                    "date": bugun,
+                    "timezone": "Europe/Berlin"
+                },
+                timeout=10
             )
 
-            print("API status:", res.status_code)
-            data = res.json()
-            print("API cevap keys:", list(data.keys()) if isinstance(data, dict) else type(data))
+            # 🔥 DEBUG
+            if res.status_code != 200:
+                return f"HATA_STATUS_{res.status_code}"
 
-            response = data.get("response", [])
-            return response if isinstance(response, list) and len(response) > 0 else "BOŞ"
+            data = res.json()
+
+            if "errors" in data and data["errors"]:
+                return f"HATA_API_{data['errors']}"
+
+            maclar = data.get("response", [])
+
+            if not maclar:
+                return "BOS_VERI"
+
+            return maclar
 
         except Exception as e:
-            print("API hata:", str(e))
-            return "HATA"
+            return f"HATA_EXCEPTION_{str(e)}"
 
-    def analiz_et(self, mac):
-        lig = mac["league"]["name"]
-        ev = mac["teams"]["home"]["name"]
-        dep = mac["teams"]["away"]["name"]
-        zaman = datetime.fromisoformat(
-            mac["fixture"]["date"].replace("Z", "+00:00")
-        ).astimezone(self.tz).strftime("%H:%M")
-
-        if any(l.lower() in lig.lower() for l in self.GOLLU):
-            return (
-                f"🚀 **ELİT GOLLÜ MAÇ**\n"
-                f"⏰ {zaman} | 🏆 {lig}\n"
-                f"⚽️ *{ev} - {dep}*\n"
-                f"🎯 Tahmin: `BTTS & 2.5 ÜST`\n"
-                f"📊 Puan: `90/100`\n"
-                f"━━━━━━━━━━━━━━━\n\n"
-            )
-        elif any(l.lower() in lig.lower() for l in self.KISIR):
-            return (
-                f"🛡️ **ELİT KISIR MAÇ**\n"
-                f"⏰ {zaman} | 🏆 {lig}\n"
-                f"⚽️ *{ev} - {dep}*\n"
-                f"🎯 Tahmin: `BTTS YOK & 2.5 ALTI`\n"
-                f"📊 Puan: `95/100`\n"
-                f"━━━━━━━━━━━━━━━\n\n"
-            )
-        elif any(l.lower() in lig.lower() for l in self.GUC):
-            return (
-                f"🚩 **BANKO MS ADAYI**\n"
-                f"⏰ {zaman} | 🏆 {lig}\n"
-                f"⚽️ *{ev} - {dep}*\n"
-                f"🎯 Tahmin: `MS 1 / MS 2`\n"
-                f"🧐 Sorgu: Güç Dengesi Onaylandı ✅\n"
-                f"━━━━━━━━━━━━━━━\n\n"
-            )
-
-        return None
 
 merdan = MerdanBeyin()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("📡 **MERDAN BEYİN DEVREYE GİRDİ...**\nBülten taranıyor...")
+    msg = await update.message.reply_text("📡 Almanya sistemi tarıyor...")
 
     sonuc = merdan.veri_cek()
 
-    if sonuc == "HATA":
-        await msg.edit_text("❌ **API BAĞLANTI HATASI!**\nAnahtarını kontrol et veya loglara bak.")
-        return
+    # 🔥 HATA YAKALAMA
+    if isinstance(sonuc, str):
 
-    if sonuc == "BOŞ":
-        await msg.edit_text("⚠️ **BÜLTEN BOŞ!**\nBugün API'den maç verisi gelmedi ya da uygun maç çıkmadı.")
-        return
+        if "HATA_STATUS" in sonuc:
+            await msg.edit_text(f"❌ STATUS HATASI:\n{sonuc}")
+            return
 
-    r_ms, r_gol, r_kisir = "", "", ""
-    bulunan = 0
+        if "HATA_API" in sonuc:
+            await msg.edit_text(f"❌ API HATASI:\n{sonuc}")
+            return
+
+        if sonuc == "BOS_VERI":
+            await msg.edit_text("⚠️ API çalışıyor ama bugün maç yok")
+            return
+
+        if "HATA_EXCEPTION" in sonuc:
+            await msg.edit_text(f"❌ SİSTEM HATASI:\n{sonuc}")
+            return
+
+    # ✅ BAŞARILI
     toplam = len(sonuc)
+    await msg.edit_text(f"✅ {toplam} maç bulundu")
 
-    for m in sonuc:
-        res = merdan.analiz_et(m)
-        if res:
-            if "BANKO MS" in res:
-                r_ms += res
-            elif "ELİT GOLLÜ" in res:
-                r_gol += res
-            else:
-                r_kisir += res
-            bulunan += 1
+    liste = ""
+    for mac in sonuc[:20]:
+        ev = mac["teams"]["home"]["name"]
+        dep = mac["teams"]["away"]["name"]
+        saat = datetime.fromisoformat(
+            mac["fixture"]["date"].replace("Z", "+00:00")
+        ).astimezone(merdan.tz).strftime("%H:%M")
 
-    rapor = (
-        f"✅ **TARAMA TAMAMLANDI!**\n\n"
-        f"📊 **İstatistik:**\n"
-        f"🔹 Taranan Toplam Maç: **{toplam}**\n"
-        f"🔹 Senin Kriterlerine Uyan: **{bulunan}**\n"
-        f"🔹 Elenen Maç Sayısı: **{toplam - bulunan}**"
-    )
+        liste += f"{saat} | {ev} - {dep}\n"
 
-    await msg.edit_text(rapor, parse_mode="Markdown")
-
-    if r_ms:
-        await update.message.reply_text(f"🏆 **BANKO MS ADAYLARI**\n\n{r_ms[:4000]}", parse_mode="Markdown")
-    if r_gol:
-        await update.message.reply_text(f"🚀 **ELİT GOLLÜ MAÇLAR**\n\n{r_gol[:4000]}", parse_mode="Markdown")
-    if r_kisir:
-        await update.message.reply_text(f"🛡️ **ELİT KISIR MAÇLAR**\n\n{r_kisir[:4000]}", parse_mode="Markdown")
-
-    if bulunan == 0:
-        await update.message.reply_text("📭 Bugün lig filtrelerine uyan elit maç çıkmadı.")
+    await update.message.reply_text(liste if liste else "Liste boş")
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    print("Merdan Bot Yayında! Telegram'dan /start yaz.")
+
+    print("BOT ALMANYA MODDA 🇩🇪")
     app.run_polling()
 
