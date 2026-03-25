@@ -4,8 +4,10 @@ import pytz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+# 🔑 BURAYA YAPIŞTIR
 TELEGRAM_TOKEN = "8747036915:AAHHheO6dgLnqCoc8YSFaQJUDmDZjN7rJo0"
 FOOTBALL_API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
+
 class MerdanBeyin:
     def __init__(self):
         self.headers = {
