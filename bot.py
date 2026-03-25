@@ -5,7 +5,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # --- 🔑 SADECE BU İKİSİNİ YAPIŞTIR VE ARANA BAKMA ---
-TELEGRAM_TOKEN = '8747036915:AAES-UKrjW3xU891kX9s36sNn5gdaNlgaz8'
+TELEGRAM_TOKEN = '8747036915:AAHHheO6dgLnqCoc8YSFaQJUDmDZjN7rJo0'
 FOOTBALL_API_KEY = '9d815aaf3a5947e681eda9a895a281b5'
 class MerdanBeyin:
     def __init__(self):
