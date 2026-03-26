@@ -16,10 +16,7 @@ BASE_URL = "https://v3.football.api-sports.io"
 headers = {
     "x-apisports-key": API_KEY
 }
-url = f"{BASE_URL}/fixtures?date={today}"
-res = requests.get(url, headers=headers)
-print("API DURUM =", res.status_code)
-print("GELEN VERI =", res.text[:500])
+
 GOLLU_LIGLER = [
     "Eredivisie",
     "Bundesliga",
