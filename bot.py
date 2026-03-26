@@ -6,7 +6,11 @@ import os
 API_KEY = os.getenv("API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
+try:
+    kontrol = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates").json()
+    print("TELEGRAM_UPDATES =", kontrol)
+except Exception as e:
+    print("GETUPDATES_HATA =", e)
 BASE_URL = "https://v3.football.api-sports.io"
 
 headers = {
