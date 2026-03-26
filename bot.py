@@ -3,9 +3,9 @@ import time
 import datetime
 import os
 
-API_KEY = os.getenv("API_KEY")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
+BOT_TOKEN = "8484634033:AAFh84p9869S4v2-g8tCDxYVjMG6ALTBgog"
+CHAT_ID = "878869943"
 try:
     kontrol = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates").json()
     print("TELEGRAM_UPDATES =", kontrol)
