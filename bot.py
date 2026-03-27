@@ -1,7 +1,6 @@
 import requests
 import datetime
 import os
-
 API_KEY = os.getenv("FOOTBALL_DATA_API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
