@@ -1,8 +1,6 @@
 import requests
-from datetime import datetime
 
-# 🔑 API KEY = 9d815aaf3a5947e681eda9a895a281b5"
-API_KEY = "BURAYA_API_KEY"
+API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
 
 BASE_URL = "https://v3.football.api-sports.io"
 
