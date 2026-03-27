@@ -4,8 +4,8 @@ import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-API_KEY = os.getenv("API_KEY")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
+BOT_TOKEN = os . getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 BASE_URL = "https://v3.football.api-sports.io"
