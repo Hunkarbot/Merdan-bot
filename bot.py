@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 # ==============================
 # AYARLAR
 # ==============================
-API_KEY = os.getenv("API_KEY")
+API_KEY = "958a48f672744800bed3aeea11efcc5f"
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
