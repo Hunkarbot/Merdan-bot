@@ -4,274 +4,277 @@ import os
 import time
 from zoneinfo import ZoneInfo
 
-API_KEY = os.getenv("FOOTBALL_DATA_API_KEY")
+# =========================================
+# AYARLAR
+# =========================================
+API_KEY = os.getenv("API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-BASE_URL = "https://api.football-data.org/v4"
+BASE_URL = "https://v3.football.api-sports.io"
 
 HEADERS = {
-    "X-Auth-Token": API_KEY
+    "x-apisports-key": API_KEY
 }
 
-BERLIN_TZ = ZoneInfo("Europe/Berlin")
+TIMEZONE = "Europe/Berlin"
 
-# Aynı takımı tekrar tekrar çekmemek için cache
-TEAM_CACHE = {}
+# API dostu küçük bekleme
+REQUEST_SLEEP = 0.4
 
-# Sadece gollü ligler
-GOLLU_LIGLER = {
+# Son 5 maçta BTTS için minimum maç sayısı
+MIN_LAST_MATCHES = 5
+
+# Çok fazla maç gelirse aşırı yük olmasın
+MAX_MATCHES_TO_ANALYZE = 250
+
+# Gollü ligler
+GOLLU_LIGLER = [
+    "Eredivisie",
     "Bundesliga",
     "2. Bundesliga",
-    "Eredivisie",
-    "Championship",
-    "Primeira Liga",
     "Belgian Pro League",
-    "Austrian Bundesliga",
+    "Pro League",
     "Swiss Super League",
-    "Super Lig",
-    "Süper Lig",
+    "Austrian Bundesliga",
+    "MLS",
+    "A-League",
+    "Championship",
+    "League One",
     "Eliteserien",
     "Allsvenskan",
-    "Danish Superliga"
-}
+    "Superliga",
+    "Super League",
+    "Süper Lig",
+    "Jupiler Pro League",
+    "Denmark Superliga",
+    "Norway Eliteserien",
+    "Sweden Allsvenskan"
+]
+
+# Kısır / riskli ligler burada direkt elenir
+DISALANAN_LIGLER = [
+    "Egypt",
+    "Algeria",
+    "Morocco",
+    "Tunisia",
+    "Tanzania",
+    "Ethiopia",
+    "Kenya",
+    "Primera Nacional"
+]
+
+# Cache
+TEAM_LAST5_CACHE = {}
+API_ERROR_LOGS = []
+
+
+# =========================================
+# YARDIMCI
+# =========================================
+def berlin_now():
+    return datetime.datetime.now(ZoneInfo(TIMEZONE))
+
+
+def log_error(msg):
+    print("HATA:", msg)
+    API_ERROR_LOGS.append(msg)
 
 
 def telegram_gonder(mesaj):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("TELEGRAM HATA: BOT_TOKEN veya CHAT_ID eksik")
+        return
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHAT_ID,
+        "text": mesaj
+    }
 
-    # Telegram mesaj limiti için parçalama
-    parcalar = []
-    while len(mesaj) > 3900:
-        kes = mesaj[:3900]
-        son_satir = kes.rfind("\n")
-        if son_satir == -1:
-            son_satir = 3900
-        parcalar.append(mesaj[:son_satir])
-        mesaj = mesaj[son_satir:].lstrip()
-    parcalar.append(mesaj)
-
-    for parca in parcalar:
-        data = {
-            "chat_id": CHAT_ID,
-            "text": parca
-        }
-        r = requests.post(url, data=data, timeout=30)
-        print("TELEGRAM STATUS:", r.status_code)
-        print("TELEGRAM CEVAP:", r.text)
-        time.sleep(1)
-
-
-def lig_uygun_mu(competition_name):
-    return competition_name in GOLLU_LIGLER
-
-
-def format_tarih_saat(utc_date_str):
     try:
-        dt_utc = datetime.datetime.fromisoformat(utc_date_str.replace("Z", "+00:00"))
-        dt_local = dt_utc.astimezone(BERLIN_TZ)
-        return dt_local.strftime("%d-%m-%Y | %H:%M")
+        res = requests.post(url, data=data, timeout=30)
+        print("TELEGRAM STATUS:", res.status_code)
+        print("TELEGRAM CEVAP:", res.text[:500])
+    except Exception as e:
+        print("TELEGRAM GONDERME HATA:", str(e))
+
+
+def api_get(url):
+    try:
+        time.sleep(REQUEST_SLEEP)
+        res = requests.get(url, headers=HEADERS, timeout=30)
+        print("GET:", url)
+        print("STATUS:", res.status_code)
+        print("RESP:", res.text[:300])
+
+        if res.status_code != 200:
+            log_error(f"API hata kodu {res.status_code} | URL: {url}")
+            return None
+
+        data = res.json()
+
+        if data.get("errors"):
+            log_error(f"API errors: {data.get('errors')} | URL: {url}")
+            return None
+
+        return data
+
+    except Exception as e:
+        log_error(f"Baglanti hatasi: {str(e)} | URL: {url}")
+        return None
+
+
+def lig_gollu_mu(league_name):
+    league_lower = (league_name or "").lower()
+
+    for risk in DISALANAN_LIGLER:
+        if risk.lower() in league_lower:
+            return False
+
+    for good in GOLLU_LIGLER:
+        if good.lower() in league_lower:
+            return True
+
+    return False
+
+
+def format_fixture_time(iso_date):
+    try:
+        dt = datetime.datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        local_dt = dt.astimezone(ZoneInfo(TIMEZONE))
+        return local_dt.strftime("%d-%m %H:%M")
     except Exception:
-        return utc_date_str
+        return iso_date
 
 
-def maclari_cek():
-    today = datetime.date.today()
+# =========================================
+# MAÇLARI ÇEK
+# =========================================
+def get_matches_for_date(date_str):
+    url = f"{BASE_URL}/fixtures?date={date_str}"
+    data = api_get(url)
+
+    if not data:
+        return []
+
+    return data.get("response", [])
+
+
+def get_today_and_tomorrow_matches():
+    now = berlin_now()
+    today = now.date()
     tomorrow = today + datetime.timedelta(days=1)
 
-    url = f"{BASE_URL}/matches"
-    params = {
-        "dateFrom": today.strftime("%Y-%m-%d"),
-        "dateTo": tomorrow.strftime("%Y-%m-%d")
-    }
+    date1 = today.strftime("%Y-%m-%d")
+    date2 = tomorrow.strftime("%Y-%m-%d")
 
-    r = requests.get(url, headers=HEADERS, params=params, timeout=30)
-    print("MAC CEKME STATUS:", r.status_code)
-    data = r.json()
-    print("MAC SAYISI:", data.get("count", 0))
-    return data.get("matches", [])
+    matches_1 = get_matches_for_date(date1)
+    matches_2 = get_matches_for_date(date2)
 
+    all_matches = matches_1 + matches_2
 
-def takim_last5(team_id):
-    if team_id in TEAM_CACHE:
-        return TEAM_CACHE[team_id]
+    # Aynı fixture iki kere gelirse temizle
+    seen_ids = set()
+    unique_matches = []
 
-    url = f"{BASE_URL}/teams/{team_id}/matches"
-    params = {
-        "status": "FINISHED",
-        "limit": 5
-    }
+    for m in all_matches:
+        fixture_id = m.get("fixture", {}).get("id")
+        if fixture_id and fixture_id not in seen_ids:
+            seen_ids.add(fixture_id)
+            unique_matches.append(m)
 
-    r = requests.get(url, headers=HEADERS, params=params, timeout=30)
-    print(f"TEAM {team_id} STATUS:", r.status_code)
-    data = r.json()
-
-    matches = data.get("matches", [])
-    TEAM_CACHE[team_id] = matches
-
-    time.sleep(0.7)  # API dostu küçük bekleme
-    return matches
+    return unique_matches, date1, date2
 
 
-def takim_formu(last_matches, team_name):
-    scored = 0
-    conceded = 0
-    valid_matches = 0
+# =========================================
+# TAKIM SON 5 MAÇ
+# =========================================
+def get_last5(team_id):
+    if team_id in TEAM_LAST5_CACHE:
+        return TEAM_LAST5_CACHE[team_id]
 
-    for m in last_matches:
-        home = m.get("homeTeam", {}).get("name")
-        away = m.get("awayTeam", {}).get("name")
+    url = f"{BASE_URL}/fixtures?team={team_id}&last=5"
+    data = api_get(url)
 
-        full = m.get("score", {}).get("fullTime", {})
-        hg = full.get("home")
-        ag = full.get("away")
+    if not data:
+        TEAM_LAST5_CACHE[team_id] = []
+        return []
 
-        if hg is None or ag is None:
-            continue
-
-        if team_name == home:
-            valid_matches += 1
-            if hg > 0:
-                scored += 1
-            if ag > 0:
-                conceded += 1
-
-        elif team_name == away:
-            valid_matches += 1
-            if ag > 0:
-                scored += 1
-            if hg > 0:
-                conceded += 1
-
-    return {
-        "valid": valid_matches,
-        "scored": scored,
-        "conceded": conceded
-    }
+    response = data.get("response", [])
+    TEAM_LAST5_CACHE[team_id] = response
+    return response
 
 
-def btts_puani(home_form, away_form):
-    # 5 maç üstünden puan
-    hs = home_form["scored"]
-    hc = home_form["conceded"]
-    as_ = away_form["scored"]
-    ac = away_form["conceded"]
+def team_scored_and_conceded_every_match(last5_matches):
+    if len(last5_matches) < MIN_LAST_MATCHES:
+        return False
 
-    # Ana mantık:
-    # ev sahibi gol atar mı + yer mi
-    # deplasman gol atar mı + yer mi
-    toplam = hs + hc + as_ + ac   # max 20
+    for m in last5_matches:
+        teams = m.get("teams", {})
+        goals = m.get("goals", {})
 
-    puan = int((toplam / 20) * 100)
+        home_id = teams.get("home", {}).get("id")
+        away_id = teams.get("away", {}).get("id")
+        home_goals = goals.get("home")
+        away_goals = goals.get("away")
 
-    # 5/5 bonusları
-    if hs == 5:
-        puan += 5
-    if hc == 5:
-        puan += 5
-    if as_ == 5:
-        puan += 5
-    if ac == 5:
-        puan += 5
+        if home_goals is None or away_goals is None:
+            return False
 
-    if puan > 100:
-        puan = 100
-
-    return puan
+        # Bu fonksiyonda takım kim onu bilmiyoruz diye dışarıda belirleyeceğiz
+        # O yüzden burada kullanılmıyor
+    return True
 
 
-def btts_aday_mi(home_form, away_form):
-    # Daha güvenli filtre: iki takım da en az 4/5 gol atmış ve 4/5 gol yemiş olsun
-    return (
-        home_form["valid"] >= 5 and
-        away_form["valid"] >= 5 and
-        home_form["scored"] >= 4 and
-        home_form["conceded"] >= 4 and
-        away_form["scored"] >= 4 and
-        away_form["conceded"] >= 4
-    )
+def team_btts_5of5_for_specific_team(team_id, last5_matches):
+    if len(last5_matches) < MIN_LAST_MATCHES:
+        return False
+
+    for m in last5_matches:
+        teams = m.get("teams", {})
+        goals = m.get("goals", {})
+
+        home_id = teams.get("home", {}).get("id")
+        away_id = teams.get("away", {}).get("id")
+        home_goals = goals.get("home")
+        away_goals = goals.get("away")
+
+        if home_goals is None or away_goals is None:
+            return False
+
+        if team_id == home_id:
+            scored = home_goals
+            conceded = away_goals
+        elif team_id == away_id:
+            scored = away_goals
+            conceded = home_goals
+        else:
+            return False
+
+        if scored <= 0 or conceded <= 0:
+            return False
+
+    return True
 
 
-def main():
-    if not API_KEY:
-        print("FOOTBALL_DATA_API_KEY eksik")
-        return
+# =========================================
+# BTTS PUANLAMA
+# =========================================
+def calculate_btts_score(home_last5, away_last5):
+    score = 0
 
-    if not BOT_TOKEN:
-        print("BOT_TOKEN eksik")
-        return
+    # Ana ultra kural: iki takım da 5/5
+    score += 50
 
-    if not CHAT_ID:
-        print("CHAT_ID eksik")
-        return
-
-    matches = maclari_cek()
-
-    adaylar = []
-
-    for m in matches:
-        try:
-            status = m.get("status", "")
-            if status not in ["SCHEDULED", "TIMED"]:
-                continue
-
-            competition = m.get("competition", {}).get("name", "")
-            if not lig_uygun_mu(competition):
-                continue
-
-            home = m.get("homeTeam", {}).get("name", "Bilinmiyor")
-            away = m.get("awayTeam", {}).get("name", "Bilinmiyor")
-            home_id = m.get("homeTeam", {}).get("id")
-            away_id = m.get("awayTeam", {}).get("id")
-            utc_date = m.get("utcDate", "")
-
-            if not home_id or not away_id:
-                continue
-
-            home_last = takim_last5(home_id)
-            away_last = takim_last5(away_id)
-
-            home_form = takim_formu(home_last, home)
-            away_form = takim_formu(away_last, away)
-
-            if not btts_aday_mi(home_form, away_form):
-                continue
-
-            puan = btts_puani(home_form, away_form)
-
-            adaylar.append({
-                "match": f"{home} - {away}",
-                "competition": competition,
-                "datetime": format_tarih_saat(utc_date),
-                "score": puan,
-                "home_stats": f"{home_form['scored']}/5 atar, {home_form['conceded']}/5 yer",
-                "away_stats": f"{away_form['scored']}/5 atar, {away_form['conceded']}/5 yer"
-            })
-
-        except Exception as e:
-            print("MAC ANALIZ HATASI:", e)
-            continue
-
-    adaylar = sorted(adaylar, key=lambda x: x["score"], reverse=True)
-
-    mesaj = "🔥 BTTS ADAYLARI | GÜNDÜZ + GECE\n\n"
-
-    if adaylar:
-        for i, a in enumerate(adaylar[:10], start=1):
-            mesaj += (
-                f"{i}. {a['match']}\n"
-                f"Lig: {a['competition']}\n"
-                f"Tarih/Saat: {a['datetime']}\n"
-                f"BTTS Puanı: {a['score']}/100\n"
-                f"Ev: {a['home_stats']}\n"
-                f"Dep: {a['away_stats']}\n\n"
-            )
-    else:
-        mesaj += "Uygun BTTS maçı bulunamadı."
-
-    print(mesaj)
-    telegram_gonder(mesaj)
-
-
-if __name__ == "__main__":
-    main()
+    # toplam gol desteği
+    def avg_total_goals(last5):
+        totals = []
+        for m in last5:
+            gh = m.get("goals", {}).get("home")
+            ga = m.get("goals", {}).get("away")
+            if gh is not None and ga is not None:
+                totals.append(gh + ga)
+        if not totals:
+            return 0
+        return sum
