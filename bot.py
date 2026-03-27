@@ -78,7 +78,13 @@ def get_matches():
     all_matches = []
 
     for d in dates:
-        data = api(f"{BASE_URL}/fixtures?date={d}")
+        def get_matches():
+    data = api(f"{BASE_URL}/fixtures?next=100")
+
+    if not data:
+        return []
+
+    return data.get("response", [])
         if data:
             all_matches += data.get("response", [])
 
