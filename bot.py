@@ -4,277 +4,243 @@ import os
 import time
 from zoneinfo import ZoneInfo
 
-# =========================================
+# ==============================
 # AYARLAR
-# =========================================
+# ==============================
 API_KEY = os.getenv("API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 BASE_URL = "https://v3.football.api-sports.io"
-
-HEADERS = {
-    "x-apisports-key": API_KEY
-}
+HEADERS = {"x-apisports-key": API_KEY}
 
 TIMEZONE = "Europe/Berlin"
+REQUEST_SLEEP = 0.5
+MAX_MATCHES_TO_ANALYZE = 100
+MAX_TELEGRAM_MATCHES = 10
 
-# API dostu küçük bekleme
-REQUEST_SLEEP = 0.4
-
-# Son 5 maçta BTTS için minimum maç sayısı
-MIN_LAST_MATCHES = 5
-
-# Çok fazla maç gelirse aşırı yük olmasın
-MAX_MATCHES_TO_ANALYZE = 250
-
-# Gollü ligler
+# 🔥 FULL GOLLÜ LİGLER
 GOLLU_LIGLER = [
-    "Eredivisie",
-    "Bundesliga",
-    "2. Bundesliga",
-    "Belgian Pro League",
-    "Pro League",
-    "Swiss Super League",
-    "Austrian Bundesliga",
-    "MLS",
-    "A-League",
-    "Championship",
-    "League One",
-    "Eliteserien",
-    "Allsvenskan",
-    "Superliga",
-    "Super League",
-    "Süper Lig",
-    "Jupiler Pro League",
-    "Denmark Superliga",
-    "Norway Eliteserien",
-    "Sweden Allsvenskan"
+    "Eredivisie","Bundesliga","2. Bundesliga","Belgian Pro League",
+    "Swiss Super League","Austrian Bundesliga","MLS","A-League",
+    "Championship","League One","League Two","Scottish Premiership",
+    "Superliga","Eliteserien","Allsvenskan","Czech Liga",
+    "Ekstraklasa","Slovakia Super Liga","Hungary NB I",
+    "Süper Lig","Liga Portugal","Serie B","Ligue 2",
+    "Spain Segunda","Croatia HNL","Slovenia PrvaLiga",
+    "Romania Liga I","Bulgaria First League",
+    "Brazil Serie A","Brazil Serie B","Colombia Primera A",
+    "Chile Primera Division","Uruguay Primera Division",
+    "Paraguay Division Profesional",
+    "Japan J1 League","Japan J2 League","K League 1",
+    "China Super League","India Super League",
+    "South Africa Premier Division"
 ]
 
-# Kısır / riskli ligler burada direkt elenir
-DISALANAN_LIGLER = [
-    "Egypt",
-    "Algeria",
-    "Morocco",
-    "Tunisia",
-    "Tanzania",
-    "Ethiopia",
-    "Kenya",
-    "Primera Nacional"
-]
+TEAM_CACHE = {}
+ERRORS = []
 
-# Cache
-TEAM_LAST5_CACHE = {}
-API_ERROR_LOGS = []
-
-
-# =========================================
+# ==============================
 # YARDIMCI
-# =========================================
-def berlin_now():
+# ==============================
+def now():
     return datetime.datetime.now(ZoneInfo(TIMEZONE))
 
-
-def log_error(msg):
-    print("HATA:", msg)
-    API_ERROR_LOGS.append(msg)
-
-
-def telegram_gonder(mesaj):
-    if not BOT_TOKEN or not CHAT_ID:
-        print("TELEGRAM HATA: BOT_TOKEN veya CHAT_ID eksik")
-        return
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": mesaj
-    }
-
+def send(msg):
     try:
-        res = requests.post(url, data=data, timeout=30)
-        print("TELEGRAM STATUS:", res.status_code)
-        print("TELEGRAM CEVAP:", res.text[:500])
-    except Exception as e:
-        print("TELEGRAM GONDERME HATA:", str(e))
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    except:
+        pass
 
-
-def api_get(url):
+def api(url):
     try:
         time.sleep(REQUEST_SLEEP)
-        res = requests.get(url, headers=HEADERS, timeout=30)
-        print("GET:", url)
-        print("STATUS:", res.status_code)
-        print("RESP:", res.text[:300])
-
-        if res.status_code != 200:
-            log_error(f"API hata kodu {res.status_code} | URL: {url}")
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        if r.status_code != 200:
+            ERRORS.append(f"API {r.status_code}")
             return None
-
-        data = res.json()
-
-        if data.get("errors"):
-            log_error(f"API errors: {data.get('errors')} | URL: {url}")
-            return None
-
-        return data
-
+        return r.json()
     except Exception as e:
-        log_error(f"Baglanti hatasi: {str(e)} | URL: {url}")
+        ERRORS.append(str(e))
         return None
 
+# ==============================
+# MAÇLAR
+# ==============================
+def get_matches():
+    t = now().date()
+    dates = [
+        t.strftime("%Y-%m-%d"),
+        (t + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    ]
 
-def lig_gollu_mu(league_name):
-    league_lower = (league_name or "").lower()
+    all_matches = []
 
-    for risk in DISALANAN_LIGLER:
-        if risk.lower() in league_lower:
-            return False
+    for d in dates:
+        data = api(f"{BASE_URL}/fixtures?date={d}")
+        if data:
+            all_matches += data.get("response", [])
 
-    for good in GOLLU_LIGLER:
-        if good.lower() in league_lower:
-            return True
+    return all_matches
 
-    return False
+# ==============================
+# CACHE LAST5
+# ==============================
+def last5(team_id):
+    if team_id in TEAM_CACHE:
+        return TEAM_CACHE[team_id]
 
-
-def format_fixture_time(iso_date):
-    try:
-        dt = datetime.datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
-        local_dt = dt.astimezone(ZoneInfo(TIMEZONE))
-        return local_dt.strftime("%d-%m %H:%M")
-    except Exception:
-        return iso_date
-
-
-# =========================================
-# MAÇLARI ÇEK
-# =========================================
-def get_matches_for_date(date_str):
-    url = f"{BASE_URL}/fixtures?date={date_str}"
-    data = api_get(url)
+    data = api(f"{BASE_URL}/fixtures?team={team_id}&last=5")
 
     if not data:
+        TEAM_CACHE[team_id] = []
         return []
 
-    return data.get("response", [])
+    TEAM_CACHE[team_id] = data.get("response", [])
+    return TEAM_CACHE[team_id]
 
+# ==============================
+# GOL ANALİZ
+# ==============================
+def stats(team_id, matches):
+    scored = 0
+    conceded = 0
 
-def get_today_and_tomorrow_matches():
-    now = berlin_now()
-    today = now.date()
-    tomorrow = today + datetime.timedelta(days=1)
+    for m in matches:
+        h = m["teams"]["home"]["id"]
+        a = m["teams"]["away"]["id"]
+        gh = m["goals"]["home"]
+        ga = m["goals"]["away"]
 
-    date1 = today.strftime("%Y-%m-%d")
-    date2 = tomorrow.strftime("%Y-%m-%d")
+        if gh is None or ga is None:
+            continue
 
-    matches_1 = get_matches_for_date(date1)
-    matches_2 = get_matches_for_date(date2)
+        if team_id == h:
+            if gh > 0: scored += 1
+            if ga > 0: conceded += 1
+        elif team_id == a:
+            if ga > 0: scored += 1
+            if gh > 0: conceded += 1
 
-    all_matches = matches_1 + matches_2
+    return scored, conceded
 
-    # Aynı fixture iki kere gelirse temizle
-    seen_ids = set()
-    unique_matches = []
+# ==============================
+# ANALİZ
+# ==============================
+def analyze(matches):
+    res = []
+    checked = 0
 
-    for m in all_matches:
-        fixture_id = m.get("fixture", {}).get("id")
-        if fixture_id and fixture_id not in seen_ids:
-            seen_ids.add(fixture_id)
-            unique_matches.append(m)
+    for m in matches:
+        if checked >= MAX_MATCHES_TO_ANALYZE:
+            break
 
-    return unique_matches, date1, date2
+        try:
+            league = m["league"]["name"]
 
+            if not any(x.lower() in league.lower() for x in GOLLU_LIGLER):
+                continue
 
-# =========================================
-# TAKIM SON 5 MAÇ
-# =========================================
-def get_last5(team_id):
-    if team_id in TEAM_LAST5_CACHE:
-        return TEAM_LAST5_CACHE[team_id]
+            home = m["teams"]["home"]
+            away = m["teams"]["away"]
 
-    url = f"{BASE_URL}/fixtures?team={team_id}&last=5"
-    data = api_get(url)
+            h_id, a_id = home["id"], away["id"]
 
-    if not data:
-        TEAM_LAST5_CACHE[team_id] = []
-        return []
+            h5 = last5(h_id)
+            a5 = last5(a_id)
 
-    response = data.get("response", [])
-    TEAM_LAST5_CACHE[team_id] = response
-    return response
+            if len(h5) < 5 or len(a5) < 5:
+                continue
 
+            hs, hc = stats(h_id, h5)
+            as_, ac = stats(a_id, a5)
 
-def team_scored_and_conceded_every_match(last5_matches):
-    if len(last5_matches) < MIN_LAST_MATCHES:
-        return False
+            # 🔥 ANA SORU
+            if hs >= 3 and hc >= 3 and as_ >= 3 and ac >= 3:
 
-    for m in last5_matches:
-        teams = m.get("teams", {})
-        goals = m.get("goals", {})
+                dt = datetime.datetime.fromisoformat(
+                    m["fixture"]["date"].replace("Z","+00:00")
+                ).astimezone(ZoneInfo(TIMEZONE))
 
-        home_id = teams.get("home", {}).get("id")
-        away_id = teams.get("away", {}).get("id")
-        home_goals = goals.get("home")
-        away_goals = goals.get("away")
+                res.append({
+                    "match": f"{home['name']} - {away['name']}",
+                    "time": dt.strftime("%d-%m %H:%M"),
+                    "league": m["league"]["country"] + " - " + league,
+                    "hs": hs, "hc": hc,
+                    "as": as_, "ac": ac
+                })
 
-        if home_goals is None or away_goals is None:
-            return False
+            checked += 1
 
-        # Bu fonksiyonda takım kim onu bilmiyoruz diye dışarıda belirleyeceğiz
-        # O yüzden burada kullanılmıyor
-    return True
+        except:
+            continue
 
+    return res, checked
 
-def team_btts_5of5_for_specific_team(team_id, last5_matches):
-    if len(last5_matches) < MIN_LAST_MATCHES:
-        return False
+# ==============================
+# RAPOR (FINAL FORMAT)
+# ==============================
+def report(matches, checked, picks):
+    now_str = now().strftime("%d-%m %H:%M")
 
-    for m in last5_matches:
-        teams = m.get("teams", {})
-        goals = m.get("goals", {})
+    lines = []
+    lines.append("🔥 HÜNKAR BTTS 🔥")
+    lines.append(f"🕒 {now_str}")
+    lines.append("📅 Bugün + Yarın")
+    lines.append("")
+    lines.append(f"📊 Toplam: {len(matches)} | İncelenen: {checked} | Aday: {len(picks)}")
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━━")
+    lines.append("🔥 BTTS ADAYLARI")
+    lines.append("━━━━━━━━━━━━━━━")
+    lines.append("")
 
-        home_id = teams.get("home", {}).get("id")
-        away_id = teams.get("away", {}).get("id")
-        home_goals = goals.get("home")
-        away_goals = goals.get("away")
+    if not picks:
+        lines.append("❌ Uygun BTTS bulunamadı")
+    else:
+        for i, p in enumerate(picks[:MAX_TELEGRAM_MATCHES], 1):
 
-        if home_goals is None or away_goals is None:
-            return False
+            avg = (p["hs"] + p["hc"] + p["as"] + p["ac"]) / 4
 
-        if team_id == home_id:
-            scored = home_goals
-            conceded = away_goals
-        elif team_id == away_id:
-            scored = away_goals
-            conceded = home_goals
-        else:
-            return False
+            if avg >= 4:
+                guc = "YÜKSEK"
+            elif avg >= 3.5:
+                guc = "ORTA-YÜKSEK"
+            else:
+                guc = "ORTA"
 
-        if scored <= 0 or conceded <= 0:
-            return False
+            lines.append(f"{i}. {p['match']}")
+            lines.append(f"⏰ {p['time']} | {p['league']}")
+            lines.append(f"A: {p['hs']}/5 atmış | {p['hc']}/5 yemiş")
+            lines.append(f"B: {p['as']}/5 atmış | {p['ac']}/5 yemiş")
+            lines.append(f"💪 {guc}")
+            lines.append("")
 
-    return True
+    if ERRORS:
+        lines.append("❌ Hata:")
+        for e in ERRORS[:2]:
+            lines.append(f"- {e}")
 
+    return "\n".join(lines)
 
-# =========================================
-# BTTS PUANLAMA
-# =========================================
-def calculate_btts_score(home_last5, away_last5):
-    score = 0
+# ==============================
+# MAIN
+# ==============================
+def main():
+    print("BOT BASLADI")
 
-    # Ana ultra kural: iki takım da 5/5
-    score += 50
+    if not API_KEY:
+        send("❌ API KEY YOK")
+        return
 
-    # toplam gol desteği
-    def avg_total_goals(last5):
-        totals = []
-        for m in last5:
-            gh = m.get("goals", {}).get("home")
-            ga = m.get("goals", {}).get("away")
-            if gh is not None and ga is not None:
-                totals.append(gh + ga)
-        if not totals:
-            return 0
-        return sum
+    matches = get_matches()
+    picks, checked = analyze(matches)
+
+    text = report(matches, checked, picks)
+
+    print(text)
+    send(text)
+
+if __name__ == "__main__":
+    main()
