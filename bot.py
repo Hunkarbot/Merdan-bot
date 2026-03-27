@@ -1,14 +1,15 @@
+import os
 import requests
 from datetime import datetime
 
-API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
-BOT_TOKEN = "BURAYA_BOT_TOKEN"
-CHAT_ID = "BURAYA_CHAT_ID"
+API_KEY = os.getenv("API_KEY")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 BASE_URL = "https://v3.football.api-sports.io"
 
 HEADERS = {
-    "x-apisports-key": API_KEY.strip()
+    "x-apisports-key": (API_KEY or "")
 }
 
 def test_api():
@@ -33,9 +34,14 @@ def test_api():
         return data["response"]
     else:
         print("API VERI DONMUYOR")
+        print(data)
         return []
 
 def send_telegram(message):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("BOT_TOKEN veya CHAT_ID eksik")
+        return
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
     payload = {
@@ -44,8 +50,9 @@ def send_telegram(message):
     }
 
     try:
-        requests.post(url, data=payload, timeout=20)
-        print("Telegram gonderildi")
+        resp = requests.post(url, data=payload, timeout=20)
+        print("TELEGRAM STATUS:", resp.status_code)
+        print("TELEGRAM CEVAP:", resp.text)
     except Exception as e:
         print("TELEGRAM HATA:", e)
 
@@ -67,5 +74,6 @@ def simple_analyze(matches):
 if __name__ == "__main__":
     matches = test_api()
     message = simple_analyze(matches)
+    print("MESAJ:")
     print(message)
     send_telegram(message)
