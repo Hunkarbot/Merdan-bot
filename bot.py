@@ -1,404 +1,312 @@
-import requests
-import time
-import datetime
 import os
+import time
+import requests
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-API_KEY = "9d815aaf3a5947e681eda9a895a281b5"
-BOT_TOKEN = "8484634033:AAFh84p9869S4v2-g8tCDxYVjMG6ALTBgog"
-CHAT_ID = "878869943"
-try:
-    kontrol = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates").json()
-    print("TELEGRAM_UPDATES =", kontrol)
-except Exception as e:
-    print("GETUPDATES_HATA =", e)
+# =========================
+# AYARLAR
+# =========================
+API_KEY = os.getenv("API_KEY")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
+
 BASE_URL = "https://v3.football.api-sports.io"
-
-headers = {
+HEADERS = {
     "x-apisports-key": API_KEY
 }
 
+TIMEZONE = "Europe/Berlin"
+
+# Gollü ligler -> BTTS YES
 GOLLU_LIGLER = [
     "Eredivisie",
     "Bundesliga",
     "2. Bundesliga",
     "Pro League",
-    "Super League",
     "Superliga",
     "Allsvenskan",
     "Eliteserien",
-    "1. Liga",
-    "Championship",
-    "League One",
-    "Süper Lig",
     "MLS",
     "A-League",
-    "J-League",
-    "K-League"
+    "Championship",
+    "Super League",
+    "1. Liga"
 ]
 
+# Kısır ligler -> UNDER 2.5
 KISIR_LIGLER = [
-    "Egyptian Premier League",
     "Botola Pro",
     "Ligue 1",
-    "Tunisian Ligue 1",
-    "Algerian Ligue 1",
-    "Tanzania Premier League",
-    "Ethiopia Premier League",
-    "Kenya Premier League",
-    "Super League Greece",
-    "Liga I",
-    "First League",
-    "SuperLiga",
-    "HNL",
-    "PrvaLiga",
-    "Primera Division",
-    "Primera A",
-    "Primera Nacional"
+    "Ligue 1 Algeria",
+    "Ligue 1 Tunisia",
+    "Premier League Tanzania",
+    "Premier League Kenya",
+    "Premier League Ethiopia",
+    "Premier League Somalia",
+    "Premier League Burundi"
 ]
 
-def send_telegram(message: str) -> None:
+# API dostu cache
+team_last5_cache = {}
+
+# =========================
+# TARİH
+# =========================
+def get_dates():
+    now_local = datetime.now(ZoneInfo(TIMEZONE))
+    today = now_local.date()
+    tomorrow = today + timedelta(days=1)
+    return today.strftime("%Y-%m-%d"), tomorrow.strftime("%Y-%m-%d")
+
+TODAY_STR, TOMORROW_STR = get_dates()
+
+# =========================
+# ORTAK API FONKSİYONU
+# =========================
+def safe_get(endpoint, params=None, sleep_sec=0.8):
+    url = f"{BASE_URL}/{endpoint}"
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            params=params,
+            timeout=20
+        )
+        time.sleep(sleep_sec)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if data.get("errors"):
+            print(f"API ERROR -> {data['errors']}")
+            return []
+
+        return data.get("response", [])
+
+    except requests.exceptions.RequestException as e:
+        print(f"REQUEST HATASI -> {endpoint} | {params} | {e}")
+        return []
+    except Exception as e:
+        print(f"GENEL HATA -> {endpoint} | {params} | {e}")
+        return []
+
+# =========================
+# MAÇLARI ÇEK
+# =========================
+def get_matches_by_date(date_str):
+    return safe_get("fixtures", {"date": date_str}, sleep_sec=1.0)
+
+def get_all_matches():
+    matches_today = get_matches_by_date(TODAY_STR)
+    matches_tomorrow = get_matches_by_date(TOMORROW_STR)
+    return matches_today + matches_tomorrow
+
+# =========================
+# TAKIM SON 5 MAÇ
+# =========================
+def get_team_last5(team_id):
+    if team_id in team_last5_cache:
+        return team_last5_cache[team_id]
+
+    matches = safe_get(
+        "fixtures",
+        {"team": team_id, "last": 5},
+        sleep_sec=1.0
+    )
+
+    team_last5_cache[team_id] = matches
+    return matches
+
+# =========================
+# MAÇ TİPİ KONTROLLERİ
+# =========================
+def is_btts_match(match):
+    try:
+        h = match["goals"]["home"]
+        a = match["goals"]["away"]
+        return h is not None and a is not None and h > 0 and a > 0
+    except Exception:
+        return False
+
+def is_under25_match(match):
+    try:
+        h = match["goals"]["home"]
+        a = match["goals"]["away"]
+        return h is not None and a is not None and (h + a) <= 2
+    except Exception:
+        return False
+
+# =========================
+# TAKIM FORM FİLTRELERİ
+# =========================
+def team_btts_5of5(last5_matches):
+    if len(last5_matches) < 5:
+        return False
+    return sum(1 for m in last5_matches if is_btts_match(m)) == 5
+
+def team_under25_4of5(last5_matches):
+    if len(last5_matches) < 5:
+        return False
+    return sum(1 for m in last5_matches if is_under25_match(m)) >= 4
+
+# =========================
+# SKORLAMA
+# =========================
+def calc_btts_score(home_last5, away_last5):
+    home_score = sum(1 for m in home_last5 if is_btts_match(m))
+    away_score = sum(1 for m in away_last5 if is_btts_match(m))
+    return home_score + away_score
+
+def calc_under_score(home_last5, away_last5):
+    home_score = sum(1 for m in home_last5 if is_under25_match(m))
+    away_score = sum(1 for m in away_last5 if is_under25_match(m))
+    return home_score + away_score
+
+# =========================
+# SAAT DÜZENLE
+# =========================
+def to_local_datetime_str(fixture_date_str):
+    try:
+        # API tarihi genelde ISO formatında gelir
+        dt_utc = datetime.fromisoformat(fixture_date_str.replace("Z", "+00:00"))
+        dt_local = dt_utc.astimezone(ZoneInfo(TIMEZONE))
+        return dt_local.strftime("%Y-%m-%d"), dt_local.strftime("%H:%M")
+    except Exception:
+        # fallback
+        return fixture_date_str[:10], fixture_date_str[11:16]
+
+# =========================
+# ANALİZ
+# =========================
+def analyze_matches():
+    fixtures = get_all_matches()
+
+    filtered_fixtures = []
+    needed_team_ids = set()
+
+    # 1) Önce sadece istediğimiz ligleri ayır
+    for match in fixtures:
+        try:
+            league_name = match["league"]["name"]
+
+            if league_name in GOLLU_LIGLER or league_name in KISIR_LIGLER:
+                filtered_fixtures.append(match)
+                needed_team_ids.add(match["teams"]["home"]["id"])
+                needed_team_ids.add(match["teams"]["away"]["id"])
+        except Exception:
+            continue
+
+    # 2) Sadece gerekli takımların son 5 maçını çek
+    for team_id in needed_team_ids:
+        get_team_last5(team_id)
+
+    btts_candidates = []
+    under_candidates = []
+
+    # 3) Cache'den analiz et
+    for match in filtered_fixtures:
+        try:
+            league_name = match["league"]["name"]
+            home_team = match["teams"]["home"]["name"]
+            away_team = match["teams"]["away"]["name"]
+            home_id = match["teams"]["home"]["id"]
+            away_id = match["teams"]["away"]["id"]
+            fixture_date = match["fixture"]["date"]
+
+            match_day, match_time = to_local_datetime_str(fixture_date)
+
+            home_last5 = team_last5_cache.get(home_id, [])
+            away_last5 = team_last5_cache.get(away_id, [])
+
+            if len(home_last5) < 5 or len(away_last5) < 5:
+                continue
+
+            # Gollü lig -> BTTS YES
+            if league_name in GOLLU_LIGLER:
+                if team_btts_5of5(home_last5) and team_btts_5of5(away_last5):
+                    score = calc_btts_score(home_last5, away_last5)
+                    btts_candidates.append({
+                        "score": score,
+                        "text": f"{match_day} {match_time} - {home_team} vs {away_team} | {league_name} | BTTS YES"
+                    })
+
+            # Kısır lig -> UNDER 2.5
+            if league_name in KISIR_LIGLER:
+                if team_under25_4of5(home_last5) and team_under25_4of5(away_last5):
+                    score = calc_under_score(home_last5, away_last5)
+                    under_candidates.append({
+                        "score": score,
+                        "text": f"{match_day} {match_time} - {home_team} vs {away_team} | {league_name} | UNDER 2.5"
+                    })
+
+        except Exception as e:
+            print(f"ANALİZ HATASI -> {e}")
+            continue
+
+    # En iyileri sırala
+    btts_candidates.sort(key=lambda x: x["score"], reverse=True)
+    under_candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    # Top seçimler
+    top_btts = btts_candidates[:3]
+    top_under = under_candidates[:2]
+
+    return top_btts, top_under
+
+# =========================
+# TELEGRAM
+# =========================
+def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
         print("BOT_TOKEN veya CHAT_ID eksik")
         return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
+    payload = {
         "chat_id": CHAT_ID,
         "text": message
     }
 
     try:
-        requests.post(url, data=data, timeout=20)
+        response = requests.post(url, data=payload, timeout=20)
+        response.raise_for_status()
+        print("Telegram mesajı gönderildi.")
     except Exception as e:
-        print("Telegram gönderim hatası:", e)
-
-def get_matches_by_date(match_date):
-    url = f"{BASE_URL}/fixtures?date={match_date}"
-    try:
-        res = requests.get(url, headers=headers, timeout=20)
-        data = res.json()
-        return data.get("response", [])
-    except Exception:
-        return []
-
-def get_last5(team_id):
-    url = f"{BASE_URL}/fixtures?team={team_id}&last=5"
-    try:
-        time.sleep(1.1)
-        res = requests.get(url, headers=headers, timeout=20)
-        data = res.json()
-        return data.get("response", [])
-    except Exception:
-        return []
-
-def calc_team_stats(last_matches, team_id):
-    played = 0
-    scored_all = 0
-    conceded_all = 0
-    btts_count = 0
-    over25_count = 0
-    under25_count = 0
-    wins = 0
-    losses = 0
-    scored_5of5 = True
-    conceded_5of5 = True
-
-    for m in last_matches:
-        try:
-            home_id = m["teams"]["home"]["id"]
-            away_id = m["teams"]["away"]["id"]
-
-            home_goals = m["goals"]["home"]
-            away_goals = m["goals"]["away"]
-
-            if home_goals is None or away_goals is None:
-                continue
-
-            if team_id == home_id:
-                gf = home_goals
-                ga = away_goals
-                won = home_goals > away_goals
-                lost = home_goals < away_goals
-            elif team_id == away_id:
-                gf = away_goals
-                ga = home_goals
-                won = away_goals > home_goals
-                lost = away_goals < home_goals
-            else:
-                continue
-
-            played += 1
-            scored_all += gf
-            conceded_all += ga
-
-            if gf == 0:
-                scored_5of5 = False
-            if ga == 0:
-                conceded_5of5 = False
-
-            if gf > 0 and ga > 0:
-                btts_count += 1
-
-            if gf + ga > 2:
-                over25_count += 1
-            else:
-                under25_count += 1
-
-            if won:
-                wins += 1
-            if lost:
-                losses += 1
-
-        except Exception:
-            continue
-
-    if played == 0:
-        return None
-
-    return {
-        "played": played,
-        "avg_scored": round(scored_all / played, 2),
-        "avg_conceded": round(conceded_all / played, 2),
-        "btts_count": btts_count,
-        "over25_count": over25_count,
-        "under25_count": under25_count,
-        "wins": wins,
-        "losses": losses,
-        "scored_5of5": scored_5of5 and played >= 5,
-        "conceded_5of5": conceded_5of5 and played >= 5
-    }
-
-def is_gollu_lig(league_name):
-    return any(x.lower() in league_name.lower() for x in GOLLU_LIGLER)
-
-def is_kisir_lig(league_name):
-    return any(x.lower() in league_name.lower() for x in KISIR_LIGLER)
-
-def btts_ok(home_stats, away_stats, league_name):
-    if not is_gollu_lig(league_name):
-        return False, 0
-
-    if not (
-        home_stats["scored_5of5"] and
-        away_stats["scored_5of5"] and
-        home_stats["conceded_5of5"] and
-        away_stats["conceded_5of5"]
-    ):
-        return False, 0
-
-    if home_stats["avg_scored"] < 1.0 or away_stats["avg_scored"] < 1.0:
-        return False, 0
-
-    if home_stats["avg_conceded"] < 1.0 or away_stats["avg_conceded"] < 1.0:
-        return False, 0
-
-    score = 35
-    score += home_stats["btts_count"] * 6
-    score += away_stats["btts_count"] * 6
-    score += int(home_stats["avg_scored"] * 5)
-    score += int(away_stats["avg_scored"] * 5)
-    score += int(home_stats["avg_conceded"] * 5)
-    score += int(away_stats["avg_conceded"] * 5)
-
-    return True, min(score, 100)
-
-def over25_ok(home_stats, away_stats, league_name):
-    if not is_gollu_lig(league_name):
-        return False, 0
-
-    if home_stats["over25_count"] < 4 or away_stats["over25_count"] < 4:
-        return False, 0
-
-    if home_stats["avg_scored"] < 1.5 or away_stats["avg_scored"] < 1.2:
-        return False, 0
-
-    if home_stats["avg_conceded"] < 1.0 and away_stats["avg_conceded"] < 1.0:
-        return False, 0
-
-    score = 30
-    score += home_stats["over25_count"] * 7
-    score += away_stats["over25_count"] * 7
-    score += int(home_stats["avg_scored"] * 6)
-    score += int(away_stats["avg_scored"] * 6)
-    score += int(home_stats["avg_conceded"] * 4)
-    score += int(away_stats["avg_conceded"] * 4)
-
-    return True, min(score, 100)
-
-def under25_ok(home_stats, away_stats, league_name):
-    if not is_kisir_lig(league_name):
-        return False, 0
-
-    if home_stats["under25_count"] < 4 or away_stats["under25_count"] < 4:
-        return False, 0
-
-    if home_stats["avg_scored"] > 1.1 or away_stats["avg_scored"] > 1.1:
-        return False, 0
-
-    if home_stats["avg_conceded"] > 1.1 or away_stats["avg_conceded"] > 1.1:
-        return False, 0
-
-    score = 30
-    score += home_stats["under25_count"] * 7
-    score += away_stats["under25_count"] * 7
-    score += int((1.2 - home_stats["avg_scored"]) * 10)
-    score += int((1.2 - away_stats["avg_scored"]) * 10)
-
-    return True, min(score, 100)
-
-def ms_ok(home_stats, away_stats):
-    if home_stats["wins"] < 4:
-        return False, 0
-
-    if away_stats["losses"] < 3:
-        return False, 0
-
-    if home_stats["avg_scored"] < 1.5:
-        return False, 0
-
-    if away_stats["avg_conceded"] < 1.2:
-        return False, 0
-
-    score = 35
-    score += home_stats["wins"] * 8
-    score += away_stats["losses"] * 8
-    score += int(home_stats["avg_scored"] * 7)
-    score += int(away_stats["avg_conceded"] * 7)
-
-    return True, min(score, 100)
-
-def analyze_match(match):
-    try:
-        fixture = match["fixture"]
-        league = match["league"]
-        teams = match["teams"]
-
-        league_name = league["name"]
-        home_name = teams["home"]["name"]
-        away_name = teams["away"]["name"]
-        home_id = teams["home"]["id"]
-        away_id = teams["away"]["id"]
-        match_time = fixture["date"]
-
-        home_last5 = get_last5(home_id)
-        away_last5 = get_last5(away_id)
-
-        home_stats = calc_team_stats(home_last5, home_id)
-        away_stats = calc_team_stats(away_last5, away_id)
-
-        if not home_stats or not away_stats:
-            return None
-
-        result = {
-            "match": f"{home_name} - {away_name}",
-            "league": league_name,
-            "time": match_time,
-            "MS": None,
-            "BTTS": None,
-            "OVER25": None,
-            "UNDER25": None
-        }
-
-        ms_pass, ms_score = ms_ok(home_stats, away_stats)
-        if ms_pass:
-            result["MS"] = ms_score
-
-        btts_pass, btts_score = btts_ok(home_stats, away_stats, league_name)
-        if btts_pass:
-            result["BTTS"] = btts_score
-
-        over_pass, over_score = over25_ok(home_stats, away_stats, league_name)
-        if over_pass:
-            result["OVER25"] = over_score
-
-        under_pass, under_score = under25_ok(home_stats, away_stats, league_name)
-        if under_pass:
-            result["UNDER25"] = under_score
-
-        return result
-
-    except Exception:
-        return None
-
-def run_scan(match_date=None):
-    if not match_date:
-        match_date = datetime.date.today().strftime("%Y-%m-%d")
-
-    matches = get_matches_by_date(match_date)
-
-    ms_list = []
-    btts_list = []
-    over_list = []
-    under_list = []
-
-    for match in matches:
-        analyzed = analyze_match(match)
-        if not analyzed:
-            continue
-
-        if analyzed["MS"] is not None:
-            ms_list.append(analyzed)
-
-        if analyzed["BTTS"] is not None:
-            btts_list.append(analyzed)
-
-        if analyzed["OVER25"] is not None:
-            over_list.append(analyzed)
-
-        if analyzed["UNDER25"] is not None:
-            under_list.append(analyzed)
-
-    ms_list = sorted(ms_list, key=lambda x: x["MS"], reverse=True)[:5]
-    btts_list = sorted(btts_list, key=lambda x: x["BTTS"], reverse=True)[:5]
-    over_list = sorted(over_list, key=lambda x: x["OVER25"], reverse=True)[:5]
-    under_list = sorted(under_list, key=lambda x: x["UNDER25"], reverse=True)[:5]
-
-    return ms_list, btts_list, over_list, under_list
-
-def format_results(ms_list, btts_list, over_list, under_list):
-    message = "📊 GUNUN ANALIZI\n\n"
-
-    message += "👑 MS ADAYLARI\n"
-    if ms_list:
-        for m in ms_list:
-            message += f"- {m['match']} | {m['MS']}\n"
+        print(f"TELEGRAM HATASI -> {e}")
+
+# =========================
+# MESAJ OLUŞTUR
+# =========================
+def build_message(top_btts, top_under):
+    msg = f"🔥 HÜNKAR BOT V3 ({TODAY_STR} + {TOMORROW_STR}) 🔥\n\n"
+
+    if top_btts:
+        msg += "🟩 EN İYİ BTTS YES:\n"
+        for i, item in enumerate(top_btts, 1):
+            msg += f"{i}) {item['text']}\n"
+        msg += "\n"
     else:
-        message += "- Uygun mac yok\n"
+        msg += "🟩 BTTS YES uygun maç yok\n\n"
 
-    message += "\n🔥 BTTS ADAYLARI\n"
-    if btts_list:
-        for m in btts_list:
-            message += f"- {m['match']} | {m['BTTS']}\n"
+    if top_under:
+        msg += "🟥 EN İYİ UNDER 2.5:\n"
+        for i, item in enumerate(top_under, 1):
+            msg += f"{i}) {item['text']}\n"
     else:
-        message += "- Uygun mac yok\n"
+        msg += "🟥 UNDER 2.5 uygun maç yok"
 
-    message += "\n⚽ 2.5 UST ADAYLARI\n"
-    if over_list:
-        for m in over_list:
-            message += f"- {m['match']} | {m['OVER25']}\n"
-    else:
-        message += "- Uygun mac yok\n"
+    return msg
 
-    message += "\n🧱 2.5 ALT ADAYLARI\n"
-    if under_list:
-        for m in under_list:
-            message += f"- {m['match']} | {m['UNDER25']}\n"
-    else:
-        message += "- Uygun mac yok\n"
-
-    return message
-
-def main():
+# =========================
+# ANA ÇALIŞMA
+# =========================
+if __name__ == "__main__":
     if not API_KEY:
         print("API_KEY eksik")
-        return
-
-    ms_list, btts_list, over_list, under_list = run_scan()
-    final_message = format_results(ms_list, btts_list, over_list, under_list)
-
-    print(final_message)
-    send_telegram(final_message)
-
-if __name__ == "__main__":
-    main()
+    else:
+        top_btts, top_under = analyze_matches()
+        final_message = build_message(top_btts, top_under)
+        print(final_message)
+        send_telegram(final_message)
 
