@@ -8,192 +8,301 @@ from zoneinfo import ZoneInfo
 # AYARLAR
 # ==============================
 API_KEY = "958a48f672744800bed3aeea11efcc5f"
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+BOT_TOKEN = "BURAYA_BOT_TOKEN_YAZ"
+CHAT_ID = "BURAYA_CHAT_ID_YAZ"
 
 BASE_URL = "https://v3.football.api-sports.io"
-HEADERS = {"x-apisports-key": API_KEY}
+HEADERS = {
+    "x-apisports-key": API_KEY
+}
 
 TIMEZONE = "Europe/Berlin"
 REQUEST_SLEEP = 0.5
 MAX_MATCHES_TO_ANALYZE = 100
 MAX_TELEGRAM_MATCHES = 10
 
-# 🔥 FULL GOLLÜ LİGLER
+# ==============================
+# GOLLÜ LİGLER
+# ==============================
 GOLLU_LIGLER = [
-    "Eredivisie","Bundesliga","2. Bundesliga","Belgian Pro League",
-    "Swiss Super League","Austrian Bundesliga","MLS","A-League",
-    "Championship","League One","League Two","Scottish Premiership",
-    "Superliga","Eliteserien","Allsvenskan","Czech Liga",
-    "Ekstraklasa","Slovakia Super Liga","Hungary NB I",
-    "Süper Lig","Liga Portugal","Serie B","Ligue 2",
-    "Spain Segunda","Croatia HNL","Slovenia PrvaLiga",
-    "Romania Liga I","Bulgaria First League",
-    "Brazil Serie A","Brazil Serie B","Colombia Primera A",
-    "Chile Primera Division","Uruguay Primera Division",
+    "Eredivisie",
+    "Bundesliga",
+    "2. Bundesliga",
+    "Belgian Pro League",
+    "Swiss Super League",
+    "Austrian Bundesliga",
+    "MLS",
+    "A-League",
+    "Championship",
+    "League One",
+    "League Two",
+    "Scottish Premiership",
+    "Superliga",
+    "Eliteserien",
+    "Allsvenskan",
+    "Czech Liga",
+    "Ekstraklasa",
+    "Slovakia Super Liga",
+    "Hungary NB I",
+    "Süper Lig",
+    "Liga Portugal",
+    "Serie B",
+    "Ligue 2",
+    "Spain Segunda",
+    "Croatia HNL",
+    "Slovenia PrvaLiga",
+    "Romania Liga I",
+    "Bulgaria First League",
+    "Brazil Serie A",
+    "Brazil Serie B",
+    "Colombia Primera A",
+    "Chile Primera Division",
+    "Uruguay Primera Division",
     "Paraguay Division Profesional",
-    "Japan J1 League","Japan J2 League","K League 1",
-    "China Super League","India Super League",
+    "Japan J1 League",
+    "Japan J2 League",
+    "K League 1",
+    "China Super League",
+    "India Super League",
     "South Africa Premier Division"
 ]
 
+# ==============================
+# GLOBAL DEĞİŞKENLER
+# ==============================
 TEAM_CACHE = {}
 ERRORS = []
+
 
 # ==============================
 # YARDIMCI
 # ==============================
-def now():
+def now_berlin():
     return datetime.datetime.now(ZoneInfo(TIMEZONE))
 
-def send(msg):
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
-    except:
-        pass
 
-def api(url):
+def add_error(msg):
+    print("HATA:", msg)
+    ERRORS.append(msg)
+
+
+def telegram_gonder(mesaj):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("TELEGRAM HATA: BOT_TOKEN veya CHAT_ID eksik")
+        return
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHAT_ID,
+        "text": mesaj
+    }
+
+    try:
+        res = requests.post(url, data=data, timeout=30)
+        print("TELEGRAM STATUS:", res.status_code)
+        print("TELEGRAM CEVAP:", res.text[:300])
+    except Exception as e:
+        print("TELEGRAM GONDERME HATA:", str(e))
+
+
+def api_get(url):
     try:
         time.sleep(REQUEST_SLEEP)
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        if r.status_code != 200:
-            ERRORS.append(f"API {r.status_code}")
+        res = requests.get(url, headers=HEADERS, timeout=30)
+
+        print("GET URL:", url)
+        print("STATUS:", res.status_code)
+        print("RESP:", res.text[:300])
+
+        if res.status_code != 200:
+            add_error(f"API hata kodu: {res.status_code}")
             return None
-        return r.json()
+
+        data = res.json()
+
+        if data.get("errors"):
+            add_error(f"API errors: {data.get('errors')}")
+            return None
+
+        return data
+
     except Exception as e:
-        ERRORS.append(str(e))
+        add_error(f"Baglanti hatasi: {str(e)}")
         return None
 
+
+def lig_uygun_mu(league_name):
+    league_name = (league_name or "").lower()
+
+    for lig in GOLLU_LIGLER:
+        if lig.lower() in league_name:
+            return True
+
+    return False
+
+
+def format_saat(iso_date):
+    try:
+        dt = datetime.datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        dt_local = dt.astimezone(ZoneInfo(TIMEZONE))
+        return dt_local.strftime("%d-%m %H:%M")
+    except Exception:
+        return iso_date
+
+
 # ==============================
-# MAÇLAR
+# MAÇLARI ÇEK
 # ==============================
 def get_matches():
-    t = now().date()
-    dates = [
-        t.strftime("%Y-%m-%d"),
-        (t + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    ]
-
-    all_matches = []
-
-    for d in dates:
-        def get_matches():
-    data = api(f"{BASE_URL}/fixtures?next=100")
+    data = api_get(f"{BASE_URL}/fixtures?next=100")
 
     if not data:
         return []
 
-    return data.get("response", [])
-        if data:
-            all_matches += data.get("response", [])
+    matches = data.get("response", [])
+    return matches
 
-    return all_matches
 
 # ==============================
-# CACHE LAST5
+# SON 5 MAÇ (CACHE)
 # ==============================
-def last5(team_id):
+def get_last5(team_id):
     if team_id in TEAM_CACHE:
         return TEAM_CACHE[team_id]
 
-    data = api(f"{BASE_URL}/fixtures?team={team_id}&last=5")
+    data = api_get(f"{BASE_URL}/fixtures?team={team_id}&last=5")
 
     if not data:
         TEAM_CACHE[team_id] = []
         return []
 
-    TEAM_CACHE[team_id] = data.get("response", [])
-    return TEAM_CACHE[team_id]
+    response = data.get("response", [])
+    TEAM_CACHE[team_id] = response
+    return response
+
 
 # ==============================
-# GOL ANALİZ
+# TAKIM GOL ATAR MI / YER Mİ
 # ==============================
-def stats(team_id, matches):
+def get_team_stats(team_id, matches):
     scored = 0
     conceded = 0
 
     for m in matches:
-        h = m["teams"]["home"]["id"]
-        a = m["teams"]["away"]["id"]
-        gh = m["goals"]["home"]
-        ga = m["goals"]["away"]
+        teams = m.get("teams", {})
+        goals = m.get("goals", {})
 
-        if gh is None or ga is None:
+        home_id = teams.get("home", {}).get("id")
+        away_id = teams.get("away", {}).get("id")
+
+        home_goals = goals.get("home")
+        away_goals = goals.get("away")
+
+        if home_goals is None or away_goals is None:
             continue
 
-        if team_id == h:
-            if gh > 0: scored += 1
-            if ga > 0: conceded += 1
-        elif team_id == a:
-            if ga > 0: scored += 1
-            if gh > 0: conceded += 1
+        if team_id == home_id:
+            if home_goals > 0:
+                scored += 1
+            if away_goals > 0:
+                conceded += 1
+
+        elif team_id == away_id:
+            if away_goals > 0:
+                scored += 1
+            if home_goals > 0:
+                conceded += 1
 
     return scored, conceded
+
 
 # ==============================
 # ANALİZ
 # ==============================
-def analyze(matches):
-    res = []
+def analyze_btts(matches):
+    candidates = []
     checked = 0
 
-    for m in matches:
+    for match in matches:
         if checked >= MAX_MATCHES_TO_ANALYZE:
             break
 
         try:
-            league = m["league"]["name"]
+            league_name = match.get("league", {}).get("name", "")
+            league_country = match.get("league", {}).get("country", "")
+            league_full = f"{league_country} - {league_name}"
 
-            if not any(x.lower() in league.lower() for x in GOLLU_LIGLER):
+            if not lig_uygun_mu(league_name) and not lig_uygun_mu(league_full):
                 continue
 
-            home = m["teams"]["home"]
-            away = m["teams"]["away"]
+            home = match.get("teams", {}).get("home", {})
+            away = match.get("teams", {}).get("away", {})
 
-            h_id, a_id = home["id"], away["id"]
+            home_id = home.get("id")
+            away_id = away.get("id")
+            home_name = home.get("name", "Home")
+            away_name = away.get("name", "Away")
 
-            h5 = last5(h_id)
-            a5 = last5(a_id)
-
-            if len(h5) < 5 or len(a5) < 5:
+            if not home_id or not away_id:
                 continue
-
-            hs, hc = stats(h_id, h5)
-            as_, ac = stats(a_id, a5)
-
-            # 🔥 ANA SORU
-            if hs >= 3 and hc >= 3 and as_ >= 3 and ac >= 3:
-
-                dt = datetime.datetime.fromisoformat(
-                    m["fixture"]["date"].replace("Z","+00:00")
-                ).astimezone(ZoneInfo(TIMEZONE))
-
-                res.append({
-                    "match": f"{home['name']} - {away['name']}",
-                    "time": dt.strftime("%d-%m %H:%M"),
-                    "league": m["league"]["country"] + " - " + league,
-                    "hs": hs, "hc": hc,
-                    "as": as_, "ac": ac
-                })
 
             checked += 1
 
-        except:
+            home_last5 = get_last5(home_id)
+            away_last5 = get_last5(away_id)
+
+            if len(home_last5) < 5 or len(away_last5) < 5:
+                continue
+
+            home_scored, home_conceded = get_team_stats(home_id, home_last5)
+            away_scored, away_conceded = get_team_stats(away_id, away_last5)
+
+            home_ok = home_scored >= 3 and home_conceded >= 3
+            away_ok = away_scored >= 3 and away_conceded >= 3
+
+            if not (home_ok and away_ok):
+                continue
+
+            avg = (home_scored + home_conceded + away_scored + away_conceded) / 4
+
+            if avg >= 4:
+                guc = "YÜKSEK"
+            elif avg >= 3.5:
+                guc = "ORTA-YÜKSEK"
+            else:
+                guc = "ORTA"
+
+            fixture_date = match.get("fixture", {}).get("date", "")
+            saat = format_saat(fixture_date)
+
+            candidates.append({
+                "match": f"{home_name} - {away_name}",
+                "time": saat,
+                "league": league_full,
+                "home_scored": home_scored,
+                "home_conceded": home_conceded,
+                "away_scored": away_scored,
+                "away_conceded": away_conceded,
+                "guc": guc
+            })
+
+        except Exception as e:
+            add_error(f"Analiz hatasi: {str(e)}")
             continue
 
-    return res, checked
+    return candidates, checked
+
 
 # ==============================
-# RAPOR (FINAL FORMAT)
+# RAPOR
 # ==============================
-def report(matches, checked, picks):
-    now_str = now().strftime("%d-%m %H:%M")
+def build_report(matches, checked, picks):
+    now_str = now_berlin().strftime("%d-%m %H:%M")
 
     lines = []
     lines.append("🔥 HÜNKAR BTTS 🔥")
     lines.append(f"🕒 {now_str}")
-    lines.append("📅 Bugün + Yarın")
+    lines.append("📅 Gündüz + Gece")
     lines.append("")
     lines.append(f"📊 Toplam: {len(matches)} | İncelenen: {checked} | Aday: {len(picks)}")
     lines.append("")
@@ -206,29 +315,20 @@ def report(matches, checked, picks):
         lines.append("❌ Uygun BTTS bulunamadı")
     else:
         for i, p in enumerate(picks[:MAX_TELEGRAM_MATCHES], 1):
-
-            avg = (p["hs"] + p["hc"] + p["as"] + p["ac"]) / 4
-
-            if avg >= 4:
-                guc = "YÜKSEK"
-            elif avg >= 3.5:
-                guc = "ORTA-YÜKSEK"
-            else:
-                guc = "ORTA"
-
             lines.append(f"{i}. {p['match']}")
             lines.append(f"⏰ {p['time']} | {p['league']}")
-            lines.append(f"A: {p['hs']}/5 atmış | {p['hc']}/5 yemiş")
-            lines.append(f"B: {p['as']}/5 atmış | {p['ac']}/5 yemiş")
-            lines.append(f"💪 {guc}")
+            lines.append(f"A: {p['home_scored']}/5 atmış | {p['home_conceded']}/5 yemiş")
+            lines.append(f"B: {p['away_scored']}/5 atmış | {p['away_conceded']}/5 yemiş")
+            lines.append(f"💪 {p['guc']}")
             lines.append("")
 
     if ERRORS:
         lines.append("❌ Hata:")
-        for e in ERRORS[:2]:
-            lines.append(f"- {e}")
+        for err in ERRORS[:3]:
+            lines.append(f"- {err}")
 
     return "\n".join(lines)
+
 
 # ==============================
 # MAIN
@@ -236,17 +336,35 @@ def report(matches, checked, picks):
 def main():
     print("BOT BASLADI")
 
-    if not API_KEY:
-        send("❌ API KEY YOK")
+    if not API_KEY or API_KEY == "BURAYA_API_KEY_YAZ":
+        telegram_gonder("❌ API KEY YOK")
+        return
+
+    if not BOT_TOKEN or BOT_TOKEN == "BURAYA_BOT_TOKEN_YAZ":
+        print("BOT TOKEN eksik")
+        return
+
+    if not CHAT_ID or CHAT_ID == "BURAYA_CHAT_ID_YAZ":
+        print("CHAT_ID eksik")
         return
 
     matches = get_matches()
-    picks, checked = analyze(matches)
+    print("TOPLAM MAC:", len(matches))
 
-    text = report(matches, checked, picks)
+    picks, checked = analyze_btts(matches)
 
-    print(text)
-    send(text)
+    report = build_report(matches, checked, picks)
+
+    print(report)
+    telegram_gonder(report)
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("KRITIK HATA:", str(e))
+        try:
+            telegram_gonder(f"❌ KRITIK HATA\n{str(e)}")
+        except Exception:
+            pass
