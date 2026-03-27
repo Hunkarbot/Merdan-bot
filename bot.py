@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 # AYARLAR
 # ==============================
 API_KEY = "958a48f672744800bed3aeea11efcc5f"
-BOT_TOKEN = "BURAYA_BOT_TOKEN_YAZ"
-CHAT_ID = "BURAYA_CHAT_ID_YAZ"
+BOT_TOKEN = "8484634033:AAFh84p9869S4v2-g8tCDxYVjMG6ALTBgog"
+CHAT_ID = "6878869943"
 
 BASE_URL = "https://v3.football.api-sports.io"
 HEADERS = {
