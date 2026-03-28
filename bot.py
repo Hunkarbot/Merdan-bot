@@ -1,4 +1,3 @@
-
 import requests
 import os
 import datetime
@@ -11,23 +10,15 @@ HEADERS = {
     "X-Auth-Token": API_KEY
 }
 
-# 🔥 BUGÜN + 3 GÜN
 today = datetime.date.today()
 future = today + datetime.timedelta(days=3)
 
 url = f"{BASE_URL}/matches?dateFrom={today}&dateTo={future}"
 
 res = requests.get(url, headers=HEADERS)
+
 data = res.json()
 
 print("STATUS:", res.status_code)
-print("MAÇ SAYISI:", len(data.get("matches", [])))
-
-for m in data.get("matches", [])[:10]:
-    print(
-        m["homeTeam"]["name"],
-        "-",
-        m["awayTeam"]["name"],
-        "|",
-        m["utcDate"]
+print("MAC SAYISI:", len(data.get("matches", [])))
     )
