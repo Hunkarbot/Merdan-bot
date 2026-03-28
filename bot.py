@@ -149,7 +149,7 @@ def main():
     matches = []
 
     for d in dates:
-        matches += api_get("/fixtures", {"date": d})
+        matches = api_get("/fixtures", {"next": 50})
 
     print("Toplam maç:", len(matches))
 
