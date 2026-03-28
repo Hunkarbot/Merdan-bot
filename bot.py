@@ -1,4 +1,3 @@
-
 import requests
 import os
 import time
@@ -8,7 +7,7 @@ from zoneinfo import ZoneInfo
 # ==============================
 # AYARLAR
 # ==============================
-API_KEY = os.getenv("FOOTBALL_API_KEY") or "BURAYA_API_KEY"
+API_KEY = os.getenv("FOOTBALL_API_KEY") or "958a48f672744800bed3aeea11efcc5f"
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "BURAYA_BOT_TOKEN"
 CHAT_ID = os.getenv("CHAT_ID") or "BURAYA_CHAT_ID"
 
