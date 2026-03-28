@@ -2,6 +2,8 @@ import requests
 import os
 import datetime
 
+print("BOT BASLADI")
+
 API_KEY = os.getenv("FOOTBALL_API_KEY")
 
 BASE_URL = "https://api.football-data.org/v4"
@@ -21,4 +23,12 @@ data = res.json()
 
 print("STATUS:", res.status_code)
 print("MAC SAYISI:", len(data.get("matches", [])))
+
+for m in data.get("matches", [])[:10]:
+    print(
+        m["homeTeam"]["name"],
+        "-",
+        m["awayTeam"]["name"],
+        "|",
+        m["utcDate"]
     )
