@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 # ==============================
 # AYARLAR
 # ==============================
-API_KEY = "958a48f672744800bed3aeea11efcc5f"
+FOOTBAL API_KEY = "958a48f672744800bed3aeea11efcc5f"
 BOT_TOKEN = "8484634033:AAFh84p9869S4v2-g8tCDxYVjMG6ALTBgog"
 CHAT_ID = "6878869943"
 
