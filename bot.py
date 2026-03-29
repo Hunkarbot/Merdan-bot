@@ -204,5 +204,25 @@ def main():
 
     send_telegram(msg)
 
+
+  def test_api():
+    dates = get_dates()
+
+    for date in dates:
+        print("Test tarih:", date)
+
+        data = api_get("/fixtures", {"date": date})
+
+        print("Gelen maç sayısı:", len(data))
+
+        if len(data) > 0:
+            first = data[0]
+            print("Örnek maç:",
+                  first["teams"]["home"]["name"],
+                  "-",
+                  first["teams"]["away"]["name"])
+        else:
+            print("MAÇ YOK ❌")
+            
 if __name__ == "__main__":
-    main()
+    test_api()
