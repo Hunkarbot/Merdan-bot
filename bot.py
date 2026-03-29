@@ -1,228 +1,149 @@
-import requests
 import os
-import time
+import requests
 import datetime
+import traceback
 from zoneinfo import ZoneInfo
 
-# ==============================
+# =========================
 # AYARLAR
-# ==============================
-API_KEY = os.getenv("FOOTBALL_API_KEY") or "958a48f672744800bed3aeea11efcc5f"
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "BURAYA_BOT_TOKEN"
-CHAT_ID = os.getenv("CHAT_ID") or "BURAYA_CHAT_ID"
+# =========================
+API_KEY = os.getenv("API_KEY")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 BASE_URL = "https://v3.football.api-sports.io"
-
 HEADERS = {
     "x-apisports-key": API_KEY
 }
 
 TZ = ZoneInfo("Europe/Berlin")
 
-# ==============================
-# GOLLÜ LİGLER (ANA FİLTRE)
-# ==============================
-GOLLU_LIGLER = [
-    "Eredivisie","Bundesliga","2. Bundesliga","Belgium","Pro League",
-    "Jupiler","Switzerland","Swiss","Austria","Austrian",
-    "MLS","A-League","Allsvenskan","Eliteserien",
-    "Championship","League One","Netherlands","Germany"
-]
 
-def is_gollu_lig(league, country):
-    text = f"{league} {country}".lower()
-    return any(l.lower() in text for l in GOLLU_LIGLER)
-
-# ==============================
+# =========================
 # TELEGRAM
-# ==============================
-def send_telegram(msg):
-    if "BURAYA" in BOT_TOKEN:
-        print(msg)
-        return
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+# =========================
+def send_telegram(message: str):
     try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=20)
-    except:
-        pass
+        if not BOT_TOKEN or not CHAT_ID:
+            print("TELEGRAM HATA: BOT_TOKEN veya CHAT_ID eksik")
+            return
 
-# ==============================
-# API
-# ==============================
-def api_get(endpoint, params=None):
-    try:
-        r = requests.get(f"{BASE_URL}{endpoint}", headers=HEADERS, params=params, timeout=30)
-        data = r.json()
-        time.sleep(1.0)  # API dostu
-        return data.get("response", [])
-    except:
-        return []
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        payload = {
+            "chat_id": CHAT_ID,
+            "text": message
+        }
+        r = requests.post(url, data=payload, timeout=30)
+        print("Telegram status:", r.status_code, r.text[:300])
+    except Exception as e:
+        print("Telegram gönderme hatası:", e)
 
-# ==============================
-# TARİHLER
-# ==============================
+
+# =========================
+# TARİH
+# =========================
 def get_dates():
     now = datetime.datetime.now(TZ)
     today = now.date()
     tomorrow = today + datetime.timedelta(days=1)
-    return [today.strftime("%Y-%m-%d"), tomorrow.strftime("%Y-%m-%d")]
-
-# ==============================
-# CACHE
-# ==============================
-team_cache = {}
-
-def get_last5(team_id):
-    if team_id in team_cache:
-        return team_cache[team_id]
-
-    data = api_get("/fixtures", {"team": team_id, "last": 5})
-    team_cache[team_id] = data
-    return data
-
-# ==============================
-# TAKIM ANALİZ
-# ==============================
-def analyze_team(team_id):
-    matches = get_last5(team_id)
-
-    scored = conceded = btts = played = 0
-
-    for m in matches:
-        hg = m["goals"]["home"]
-        ag = m["goals"]["away"]
-
-        if hg is None or ag is None:
-            continue
-
-        played += 1
-
-        if m["teams"]["home"]["id"] == team_id:
-            gf, ga = hg, ag
-        else:
-            gf, ga = ag, hg
-
-        if gf > 0: scored += 1
-        if ga > 0: conceded += 1
-        if gf > 0 and ga > 0: btts += 1
-
-    return {
-        "played": played,
-        "scored": scored,
-        "conceded": conceded,
-        "btts": btts
-    }
-
-# ==============================
-# BTTS KARAR
-# ==============================
-def is_btts_candidate(home, away):
-    # ana mantık
-    if home["scored"] < 4: return False
-    if away["scored"] < 4: return False
-    if home["conceded"] < 3: return False
-    if away["conceded"] < 3: return False
-
-    return True
-
-# ==============================
-# PUAN
-# ==============================
-def score(home, away):
-    s = 0
-
-    s += home["scored"] * 5
-    s += away["scored"] * 5
-    s += home["conceded"] * 4
-    s += away["conceded"] * 4
-    s += home["btts"] * 2
-    s += away["btts"] * 2
-
-    return min(s, 100)
-
-# ==============================
-# ANA
-# ==============================
-def main():
-    dates = get_dates()
-    matches = []
-
-    for d in dates:
-        matches = api_get("/fixtures", {"next": 50})
-
-    print("Toplam maç:", len(matches))
-
-    results = []
-
-    for m in matches:
-        league = m["league"]["name"]
-        country = m["league"]["country"]
-
-        # 🔥 EN ÖNEMLİ FİLTRE (API KURTARIR)
-        if not is_gollu_lig(league, country):
-            continue
-
-        home_id = m["teams"]["home"]["id"]
-        away_id = m["teams"]["away"]["id"]
-
-        home_stats = analyze_team(home_id)
-        away_stats = analyze_team(away_id)
-
-        if home_stats["played"] < 5 or away_stats["played"] < 5:
-            continue
-
-        if not is_btts_candidate(home_stats, away_stats):
-            continue
-
-        puan = score(home_stats, away_stats)
-
-        if puan < 70:
-            continue
-
-        dt = datetime.datetime.fromisoformat(m["fixture"]["date"].replace("Z","+00:00")).astimezone(TZ)
-
-        results.append({
-            "match": f"{m['teams']['home']['name']} vs {m['teams']['away']['name']}",
-            "league": f"{country} - {league}",
-            "time": dt.strftime("%d.%m %H:%M"),
-            "score": puan
-        })
-
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
-
-    print("BTTS aday:", len(results))
-
-    if not results:
-        send_telegram("Bugün güçlü BTTS adayı yok.")
-        return
-
-    msg = "🔥 BTTS ADAYLARI\n\n"
-
-    for i, r in enumerate(results[:10], 1):
-        msg += f"{i}) {r['match']}\n{r['league']}\n🕒 {r['time']}\n📈 {r['score']}/100\n\n"
-
-    send_telegram(msg)
+    return [
+        today.strftime("%Y-%m-%d"),
+        tomorrow.strftime("%Y-%m-%d")
+    ]
 
 
-  def test_api():
-    dates = get_dates()
+# =========================
+# API
+# =========================
+def api_get(endpoint, params=None):
+    try:
+        if not API_KEY:
+            raise ValueError("API_KEY eksik")
 
-    for date in dates:
-        print("Test tarih:", date)
+        url = f"{BASE_URL}{endpoint}"
+        r = requests.get(url, headers=HEADERS, params=params, timeout=30)
 
-        data = api_get("/fixtures", {"date": date})
+        print("API URL:", r.url)
+        print("API Status:", r.status_code)
 
-        print("Gelen maç sayısı:", len(data))
+        # Ham cevabı biraz göster
+        raw_text = r.text[:1000]
+        print("API Raw:", raw_text)
 
-        if len(data) > 0:
-            first = data[0]
-            print("Örnek maç:",
-                  first["teams"]["home"]["name"],
-                  "-",
-                  first["teams"]["away"]["name"])
-        else:
-            print("MAÇ YOK ❌")
-            
+        data = r.json()
+
+        # API hata döndürdüyse
+        if r.status_code != 200:
+            raise Exception(f"API HTTP HATA {r.status_code} | {raw_text}")
+
+        # Bazı durumlarda API errors alanı dolu gelir
+        api_errors = data.get("errors")
+        if api_errors:
+            raise Exception(f"API errors: {api_errors}")
+
+        return data
+
+    except Exception as e:
+        err = f"API_GET HATA\nEndpoint: {endpoint}\nParams: {params}\nHata: {e}"
+        print(err)
+        print(traceback.format_exc())
+        send_telegram(err)
+        return None
+
+
+# =========================
+# TEST
+# =========================
+def test_api_and_key():
+    try:
+        send_telegram("Test başladı: API key ve fixtures kontrol ediliyor.")
+
+        if not API_KEY:
+            raise ValueError("API_KEY ortam değişkeni boş")
+        if not BOT_TOKEN:
+            raise ValueError("BOT_TOKEN ortam değişkeni boş")
+        if not CHAT_ID:
+            raise ValueError("CHAT_ID ortam değişkeni boş")
+
+        # Önce basit bir endpoint ile key testi
+        status_data = api_get("/status")
+        if not status_data:
+            raise Exception("/status endpoint boş döndü")
+
+        send_telegram("API key geçerli görünüyor. Şimdi fixtures test ediliyor.")
+
+        dates = get_dates()
+        total_all = 0
+        lines = []
+
+        for date in dates:
+            data = api_get("/fixtures", {"date": date})
+            if not data:
+                lines.append(f"{date}: veri alınamadı")
+                continue
+
+            results = data.get("results", 0)
+            response = data.get("response", [])
+            total_all += len(response)
+
+            lines.append(f"{date}: {len(response)} maç")
+
+            if len(response) > 0:
+                first = response[0]
+                home = first["teams"]["home"]["name"]
+                away = first["teams"]["away"]["name"]
+                league = first["league"]["name"]
+                lines.append(f"Örnek: {home} - {away} | {league}")
+
+        final_msg = "API TEST SONUCU\n\n" + "\n".join(lines) + f"\n\nToplam çekilen maç: {total_all}"
+        print(final_msg)
+        send_telegram(final_msg)
+
+    except Exception as e:
+        err_text = f"GENEL TEST HATASI\n{e}\n\n{traceback.format_exc()}"
+        print(err_text)
+        send_telegram(err_text)
+
+
 if __name__ == "__main__":
-    test_api()
+    test_api_and_key()
