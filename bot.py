@@ -1,5 +1,6 @@
 import os
 import requests
+import datetime
 
 API_KEY = os.getenv("FOOTBALL_DATA_API_KEY")
 
@@ -8,29 +9,27 @@ headers = {
 }
 
 def test_api():
-    try:
-        print("API test başlıyor...")
+    today = datetime.date.today().strftime("%Y-%m-%d")
 
-        url = "https://api.football-data.org/v4/matches"
-        r = requests.get(url, headers=headers)
+    url = f"https://api.football-data.org/v4/matches?dateFrom={today}&dateTo={today}"
 
-        print("Status:", r.status_code)
+    print("URL:", url)
 
-        data = r.json()
+    r = requests.get(url, headers=headers)
 
-        matches = data.get("matches", [])
+    print("Status:", r.status_code)
 
-        print("Toplam maç:", len(matches))
+    data = r.json()
+    matches = data.get("matches", [])
 
-        if len(matches) > 0:
-            m = matches[0]
-            print("Örnek:",
-                  m["homeTeam"]["name"],
-                  "-",
-                  m["awayTeam"]["name"])
+    print("Toplam maç:", len(matches))
 
-    except Exception as e:
-        print("HATA:", e)
+    if len(matches) > 0:
+        m = matches[0]
+        print("Örnek:",
+              m["homeTeam"]["name"],
+              "-",
+              m["awayTeam"]["name"])
 
 if __name__ == "__main__":
     test_api()
