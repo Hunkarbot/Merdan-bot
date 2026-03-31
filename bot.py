@@ -5,7 +5,7 @@ from datetime import datetime
 # ============================================================
 # V10.2 "GELİŞMİŞ BETON ZIRH" - 2.5 ALT & KG YOK ODAKLI
 # ============================================================
-API_KEY = "SENIN_API_KEY_BURAYA"
+API_KEY = "958a48f672744800bed3aeea11efcc5f"
 BASE_URL = "https://v3.football.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
 
