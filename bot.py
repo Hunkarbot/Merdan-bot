@@ -2,6 +2,7 @@ import os
 import requests
 import datetime
 import traceback
+from zoneinfo import ZoneInfo
 
 API_KEY = os.getenv("API_KEY", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -9,17 +10,17 @@ CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
 BASE_URL = "https://v3.football.api-sports.io"
 HEADERS = {"x-apisports-key": API_KEY}
+TZ = ZoneInfo("Europe/Berlin")
 
 def log(msg):
     print(msg, flush=True)
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text}
+    data = {"chat_id": CHAT_ID, "text": text[:3900]}
     try:
         r = requests.post(url, data=data, timeout=20)
         log(f"Telegram status: {r.status_code}")
-        log(f"Telegram cevap: {r.text[:500]}")
     except Exception as e:
         log(f"Telegram hata: {e}")
 
@@ -31,18 +32,30 @@ def get_matches_by_date(date_str):
     r = requests.get(url, headers=HEADERS, timeout=30)
 
     log(f"Fixtures status: {r.status_code}")
-    log(f"Fixtures cevap: {r.text[:1000]}")
+    raw_text = r.text[:1200]
+    log(f"Fixtures raw: {raw_text}")
 
     if r.status_code != 200:
-        return []
+        return [], f"HTTP {r.status_code}\n{raw_text}"
 
-    data = r.json()
+    try:
+        data = r.json()
+    except Exception:
+        return [], f"JSON parse hatası\n{raw_text}"
 
-    if data.get("errors"):
-        log(f"API errors: {data['errors']}")
+    results = data.get("results")
+    errors = data.get("errors")
+    response = data.get("response", [])
 
-    log(f"Results: {data.get('results')}")
-    return data.get("response", [])
+    debug = (
+        f"Tarih: {date_str}\n"
+        f"Status: {r.status_code}\n"
+        f"Results: {results}\n"
+        f"Errors: {errors}\n"
+        f"Raw: {str(data)[:1200]}"
+    )
+
+    return response, debug
 
 def format_matches(matches, limit=10):
     lines = []
@@ -65,35 +78,39 @@ def main():
         if not CHAT_ID:
             raise ValueError("CHAT_ID boş")
 
-        send_telegram_message("✅ Bot aktif. Maç verisi test ediliyor.")
-
-        today = datetime.datetime.utcnow().date()
+        now_local = datetime.datetime.now(TZ).date()
         dates = [
-            today.strftime("%Y-%m-%d"),
-            (today + datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
-            (today - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
+            now_local.strftime("%Y-%m-%d"),
+            (now_local + datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
+            (now_local - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
         ]
 
-        matches = []
-        used_date = None
+        send_telegram_message(
+            f"✅ DEBUG TEST\nYerel tarih: {now_local}\nDenenen tarihler: {', '.join(dates)}"
+        )
+
+        found_matches = []
+        found_date = None
 
         for d in dates:
-            matches = get_matches_by_date(d)
+            matches, debug = get_matches_by_date(d)
+            send_telegram_message("📡 DEBUG\n" + debug)
+
             if matches:
-                used_date = d
+                found_matches = matches
+                found_date = d
                 break
 
-        if not matches:
-            send_telegram_message("⚠️ API çalıştı ama bugün/yarın/dün için maç verisi boş döndü. Deploy loguna bak.")
+        if not found_matches:
+            send_telegram_message("⚠️ Bugün/yarın/dün için response boş geldi.")
             return
 
-        msg = f"✅ Maç bulundu ({used_date})\n\n{format_matches(matches, 10)}"
-        send_telegram_message(msg)
+        send_telegram_message(f"✅ Maç bulundu ({found_date})\n\n{format_matches(found_matches, 10)}")
 
     except Exception as e:
         err = f"❌ HATA: {e}\n\n{traceback.format_exc()}"
         log(err)
-        send_telegram_message(err[:3500])
+        send_telegram_message(err[:3900])
 
 if __name__ == "__main__":
     main()
