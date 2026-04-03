@@ -1,248 +1,459 @@
 import os
 import time
+import logging
 import requests
-import datetime
-import traceback
-from zoneinfo import ZoneInfo
 
-API_KEY = os.getenv("API_KEY", "").strip()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-CHAT_ID = os.getenv("CHAT_ID", "").strip()
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-BASE_URL = "https://api.football-data.org/v4"
-HEADERS = {"X-Auth-Token": API_KEY}
-TZ = ZoneInfo("Europe/Berlin")
+# =========================
+# AYARLAR
+# =========================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_KEY = os.getenv("API_KEY")
 
-COMP_CODES = ["BL1", "PL", "ELC", "PPL", "SA", "PD"]  # BL2 403 veriyorsa şimdilik çıkardım
+BASE_URL = "https://v3.football.api-sports.io"
+HEADERS = {
+    "x-apisports-key": API_KEY
+}
 
-REQUEST_SLEEP_SECONDS = 2.0
-POLL_SLEEP_SECONDS = 3
-LAST_UPDATE_ID = None
+# Gollü / uygun gördüğün ligler
+LEAGUES = [
+    39,   # Premier League
+    78,   # Bundesliga
+    140,  # La Liga
+    135,  # Serie A
+    61,   # Ligue 1
+    94,   # Primeira Liga
+    88,   # Eredivisie
+    203,  # Championship
+]
 
+# Sadece yaklaşan maçlar
+VALID_STATUSES = {"NS", "TBD", "TIMED", "SCHEDULED"}
 
-def log(msg):
-    now = datetime.datetime.now(TZ).strftime("%d.%m %H:%M:%S")
-    print(f"[{now}] {msg}", flush=True)
+# API dostu limitler
+MAX_MATCHES_TO_ANALYZE = 12     # /btts için en fazla kaç maç analiz edilsin
+REQUEST_SLEEP = 0.7             # istekler arası bekleme
+RETRY_429_SLEEP = 2.5           # 429 olursa bekleme
+HTTP_TIMEOUT = 20
 
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
-def validate_env():
-    if not API_KEY:
-        raise ValueError("API_KEY boş")
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN boş")
-    if not CHAT_ID:
-        raise ValueError("CHAT_ID boş")
-
-
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text[:4000],
-    }
-    try:
-        r = requests.post(url, data=payload, timeout=20)
-        log(f"Telegram status: {r.status_code}")
-        if r.status_code != 200:
-            log(f"Telegram raw: {r.text[:300]}")
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Telegram hata: {e}")
-        return False
+session = requests.Session()
+session.headers.update(HEADERS)
 
 
-def get_updates(offset=None):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    params = {"timeout": 20}
-    if offset is not None:
-        params["offset"] = offset
+# =========================
+# YARDIMCI
+# =========================
+def safe_get(endpoint: str, params: dict | None = None, retries: int = 2):
+    """
+    API dostu GET.
+    429 olursa kısa bekleyip tekrar dener.
+    """
+    url = f"{BASE_URL}{endpoint}"
 
-    try:
-        r = requests.get(url, params=params, timeout=30)
-        if r.status_code != 200:
-            log(f"getUpdates hata: {r.status_code} | {r.text[:300]}")
-            return []
-        data = r.json()
-        return data.get("result", [])
-    except Exception as e:
-        log(f"getUpdates exception: {e}")
-        return []
-
-
-def get_matches_for_comp(comp_code, date_from, date_to):
-    url = f"{BASE_URL}/competitions/{comp_code}/matches"
-    params = {
-        "dateFrom": date_from,
-        "dateTo": date_to,
-    }
-
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=30)
-        log(f"{comp_code} status: {r.status_code}")
-
-        if r.status_code == 200:
-            data = r.json()
-            return data.get("matches", []), None
-
-        return [], f"{comp_code}: HTTP {r.status_code}"
-
-    except Exception as e:
-        return [], f"{comp_code}: {e}"
-
-
-def deduplicate_matches(matches):
-    seen = set()
-    unique = []
-
-    for m in matches:
-        key = m.get("id") or (
-            m.get("utcDate", ""),
-            m.get("homeTeam", {}).get("name", ""),
-            m.get("awayTeam", {}).get("name", "")
-        )
-        if key not in seen:
-            seen.add(key)
-            unique.append(m)
-
-    return unique
-
-
-def format_matches(matches, limit=20):
-    lines = []
-
-    for m in matches[:limit]:
-        comp = m.get("competition", {}).get("name", "Lig")
-        home = m.get("homeTeam", {}).get("name", "Home")
-        away = m.get("awayTeam", {}).get("name", "Away")
-        utc_date = m.get("utcDate", "")
-        status = m.get("status", "-")
-
+    for attempt in range(retries + 1):
         try:
-            dt = datetime.datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
-            local_dt = dt.astimezone(TZ).strftime("%d.%m %H:%M")
-        except Exception:
-            local_dt = utc_date
+            resp = session.get(url, params=params, timeout=HTTP_TIMEOUT)
 
-        lines.append(f"{local_dt} | {comp} | {home} - {away} | {status}")
+            if resp.status_code == 429:
+                if attempt < retries:
+                    time.sleep(RETRY_429_SLEEP)
+                    continue
+                return None, "HTTP 429"
 
-    return "\n".join(lines)
+            resp.raise_for_status()
+            return resp.json(), None
+
+        except requests.RequestException as e:
+            if attempt < retries:
+                time.sleep(1.5)
+                continue
+            return None, str(e)
+
+    return None, "Bilinmeyen hata"
 
 
-def build_matches_message():
-    today = datetime.datetime.now(TZ).date()
-    tomorrow = today + datetime.timedelta(days=1)
+def format_match_time(fixture: dict) -> tuple[str, str]:
+    """
+    API-Sports fixture date -> DD.MM ve HH:MM
+    UTC döner; çok sorun değil, önce sistemi oturtalım.
+    """
+    date_str = fixture.get("date", "")
+    if len(date_str) >= 16:
+        tarih = f"{date_str[8:10]}.{date_str[5:7]}"
+        saat = date_str[11:16]
+        return tarih, saat
+    return "--.--", "--:--"
 
-    date_from = today.strftime("%Y-%m-%d")
-    date_to = tomorrow.strftime("%Y-%m-%d")
+
+def get_fixtures_by_date_and_league(target_date: str, league_id: int):
+    """
+    Belirli tarih + lig için maçlar.
+    """
+    data, err = safe_get("/fixtures", params={
+        "date": target_date,
+        "league": league_id,
+        "season": 2025 if target_date.startswith("2025") else 2026
+    })
+
+    if err:
+        return [], err
+
+    return data.get("response", []), None
+
+
+def get_upcoming_matches():
+    """
+    Bugün + yarın maçları çeker.
+    """
+    from datetime import datetime, timedelta
+
+    today = datetime.utcnow().date()
+    tomorrow = today + timedelta(days=1)
+
+    dates = [today.isoformat(), tomorrow.isoformat()]
 
     all_matches = []
     errors = []
 
-    for code in COMP_CODES:
-        matches, error = get_matches_for_comp(code, date_from, date_to)
+    for d in dates:
+        for league_id in LEAGUES:
+            fixtures, err = get_fixtures_by_date_and_league(d, league_id)
 
-        if matches:
-            all_matches.extend(matches)
+            if err:
+                errors.append(f"- Lig {league_id}: {err}")
+                time.sleep(REQUEST_SLEEP)
+                continue
 
-        if error:
-            errors.append(error)
+            for item in fixtures:
+                fixture = item.get("fixture", {})
+                league = item.get("league", {})
+                teams = item.get("teams", {})
 
-        time.sleep(REQUEST_SLEEP_SECONDS)
+                status_short = fixture.get("status", {}).get("short", "")
+                if status_short not in VALID_STATUSES:
+                    continue
 
-    all_matches = deduplicate_matches(all_matches)
-    all_matches.sort(key=lambda x: x.get("utcDate", ""))
+                tarih, saat = format_match_time(fixture)
 
-    if not all_matches and errors:
-        return (
-            f"❌ Maç listesi alınamadı.\n"
-            f"Aralık: {date_from} → {date_to}\n"
-            f"Hatalar:\n- " + "\n- ".join(errors[:8])
-        )
+                all_matches.append({
+                    "fixture_id": fixture.get("id"),
+                    "league_id": league.get("id"),
+                    "league_name": league.get("name", "Lig"),
+                    "date": tarih,
+                    "time": saat,
+                    "status": status_short,
+                    "home_id": teams.get("home", {}).get("id"),
+                    "home_name": teams.get("home", {}).get("name", "Ev Sahibi"),
+                    "away_id": teams.get("away", {}).get("id"),
+                    "away_name": teams.get("away", {}).get("name", "Deplasman"),
+                })
 
-    if not all_matches:
-        return (
-            f"⚠️ Seçilen liglerde bugün/yarın maç bulunamadı.\n"
-            f"Aralık: {date_from} → {date_to}"
-        )
+            time.sleep(REQUEST_SLEEP)
 
-    msg = (
-        f"✅ Toplam {len(all_matches)} maç bulundu\n"
-        f"Aralık: {date_from} → {date_to}\n"
-        f"Ligler: {', '.join(COMP_CODES)}\n\n"
-        f"{format_matches(all_matches, 20)}"
+    # aynı fixture birkaç kez gelmesin
+    uniq = {}
+    for m in all_matches:
+        uniq[m["fixture_id"]] = m
+
+    sorted_matches = sorted(
+        uniq.values(),
+        key=lambda x: (x["date"], x["time"], x["league_name"], x["home_name"])
     )
 
-    if errors:
-        msg += "\n\n⚠️ Bazı liglerde hata oldu:\n- " + "\n- ".join(errors[:5])
-
-    return msg
+    return sorted_matches, errors
 
 
-def handle_message(text, chat_id):
-    text = (text or "").strip().lower()
+def get_last_five_matches(team_id: int):
+    """
+    Takımın son 5 maçını alır.
+    """
+    data, err = safe_get("/fixtures", params={
+        "team": team_id,
+        "last": 5
+    })
 
-    if str(chat_id) != CHAT_ID:
+    if err:
+        return [], err
+
+    return data.get("response", []), None
+
+
+def takim_form_analizi(son_maclar: list, takim_id: int):
+    """
+    Son 5 maçta:
+    - kaçında gol attı?
+    - kaçında gol yedi?
+    """
+    atti = 0
+    yedi = 0
+    toplam = 0
+
+    for mac in son_maclar:
+        try:
+            teams = mac.get("teams", {})
+            goals = mac.get("goals", {})
+
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+
+            home_id = home.get("id")
+            away_id = away.get("id")
+
+            home_goals = goals.get("home")
+            away_goals = goals.get("away")
+
+            if home_goals is None or away_goals is None:
+                continue
+
+            if takim_id == home_id:
+                kendi_gol = home_goals
+                rakip_gol = away_goals
+            elif takim_id == away_id:
+                kendi_gol = away_goals
+                rakip_gol = home_goals
+            else:
+                continue
+
+            toplam += 1
+
+            if kendi_gol > 0:
+                atti += 1
+            if rakip_gol > 0:
+                yedi += 1
+
+        except Exception:
+            continue
+
+    return {
+        "oynanan": toplam,
+        "atti": atti,
+        "yedi": yedi,
+        "atti_oran": round(atti / toplam, 2) if toplam else 0,
+        "yedi_oran": round(yedi / toplam, 2) if toplam else 0,
+    }
+
+
+def btts_atti_yedi_sistemi(ev_form: dict, dep_form: dict):
+    """
+    Ana sistem:
+    A atar mı?
+    A yer mi?
+    B atar mı?
+    B yer mi?
+    """
+    skor = 0
+    nedenler = []
+
+    # Ev atar mı?
+    if ev_form["atti"] >= 4:
+        skor += 25
+        nedenler.append(f"Ev sahibi son 5 maçta {ev_form['atti']}/5 gol atmış")
+    elif ev_form["atti"] == 3:
+        skor += 10
+        nedenler.append("Ev sahibi gol bulma gücü orta")
+
+    # Ev yer mi?
+    if ev_form["yedi"] >= 4:
+        skor += 25
+        nedenler.append(f"Ev sahibi son 5 maçta {ev_form['yedi']}/5 gol yemiş")
+    elif ev_form["yedi"] == 3:
+        skor += 10
+        nedenler.append("Ev sahibi gol yeme riski orta")
+
+    # Dep atar mı?
+    if dep_form["atti"] >= 4:
+        skor += 25
+        nedenler.append(f"Deplasman son 5 maçta {dep_form['atti']}/5 gol atmış")
+    elif dep_form["atti"] == 3:
+        skor += 10
+        nedenler.append("Deplasman gol bulma gücü orta")
+
+    # Dep yer mi?
+    if dep_form["yedi"] >= 4:
+        skor += 25
+        nedenler.append(f"Deplasman son 5 maçta {dep_form['yedi']}/5 gol yemiş")
+    elif dep_form["yedi"] == 3:
+        skor += 10
+        nedenler.append("Deplasman gol yeme riski orta")
+
+    # Sert filtre
+    uygun_mu = (
+        ev_form["atti"] >= 4 and
+        ev_form["yedi"] >= 4 and
+        dep_form["atti"] >= 4 and
+        dep_form["yedi"] >= 4
+    )
+
+    return {
+        "btts_skor": skor,
+        "uygun_mu": uygun_mu,
+        "nedenler": nedenler
+    }
+
+
+def mac_btts_analiz(match_item: dict):
+    """
+    Tek maç için son 5 + attı mı yedi mi analizi
+    """
+    ev_id = match_item["home_id"]
+    dep_id = match_item["away_id"]
+
+    ev_son5, ev_err = get_last_five_matches(ev_id)
+    time.sleep(REQUEST_SLEEP)
+
+    dep_son5, dep_err = get_last_five_matches(dep_id)
+    time.sleep(REQUEST_SLEEP)
+
+    if ev_err or dep_err:
+        return {
+            "mac": f"{match_item['home_name']} - {match_item['away_name']}",
+            "hata": f"Ev hata: {ev_err or '-'} | Dep hata: {dep_err or '-'}"
+        }
+
+    ev_form = takim_form_analizi(ev_son5, ev_id)
+    dep_form = takim_form_analizi(dep_son5, dep_id)
+    sistem = btts_atti_yedi_sistemi(ev_form, dep_form)
+
+    return {
+        "mac": f"{match_item['home_name']} - {match_item['away_name']}",
+        "lig": match_item["league_name"],
+        "saat": f"{match_item['date']} {match_item['time']}",
+        "ev_form": ev_form,
+        "dep_form": dep_form,
+        "btts_skor": sistem["btts_skor"],
+        "btts_aday": sistem["uygun_mu"],
+        "nedenler": sistem["nedenler"],
+        "hata": None
+    }
+
+
+def btts_mesaj_olustur(analizlar: list):
+    """
+    Telegram için kısa ve temiz çıktı
+    """
+    adaylar = [a for a in analizlar if not a.get("hata") and a.get("btts_aday")]
+    adaylar = sorted(adaylar, key=lambda x: x["btts_skor"], reverse=True)
+
+    if not adaylar:
+        return "❌ Uygun BTTS adayı çıkmadı."
+
+    lines = ["🔥 ATTİ MI / YEDİ Mİ BTTS ADAYLARI", ""]
+
+    for a in adaylar[:8]:
+        lines.append(f"⚽ {a['mac']}")
+        lines.append(f"Lig: {a['lig']} | Saat: {a['saat']}")
+        lines.append(f"Skor: {a['btts_skor']}/100")
+        lines.append(
+            f"Ev: attı {a['ev_form']['atti']}/5 | yedi {a['ev_form']['yedi']}/5"
+        )
+        lines.append(
+            f"Dep: attı {a['dep_form']['atti']}/5 | yedi {a['dep_form']['yedi']}/5"
+        )
+        lines.append("✅ BTTS adayı")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+# =========================
+# TELEGRAM KOMUTLARI
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "✅ Hünkar bot hazır.\n\n"
+        "Komutlar:\n"
+        "/test - bot çalışıyor mu\n"
+        "/maclar - yaklaşan maçlar\n"
+        "/btts - attı mı yedi mi BTTS adayları"
+    )
+
+
+async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot çalışıyor kral.")
+
+
+async def maclar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Maçlar hazırlanıyor...")
+
+    matches, errors = get_upcoming_matches()
+
+    if not matches:
+        mesaj = "⚠️ Yaklaşan maç bulunamadı."
+        if errors:
+            mesaj += "\n\n⚠️ Hatalar:\n" + "\n".join(errors[:10])
+        await update.message.reply_text(mesaj)
         return
 
-    if text == "/start":
-        send_telegram_message(
-            "✅ Hünkar bot hazır.\n"
-            "Komutlar:\n"
-            "/maclar - bugün/yarın maçları getir\n"
-            "/test - bot çalışıyor mu kontrol et"
+    lines = [f"✅ Toplam {len(matches)} yaklaşan maç bulundu", ""]
+
+    for m in matches[:35]:
+        lines.append(
+            f"{m['date']} {m['time']} | {m['league_name']} | "
+            f"{m['home_name']} - {m['away_name']} | {m['status']}"
         )
 
-    elif text == "/maclar":
-        send_telegram_message("⏳ Maçlar hazırlanıyor...")
-        msg = build_matches_message()
-        send_telegram_message(msg)
+    if errors:
+        lines.append("")
+        lines.append("⚠️ Bazı liglerde hata oldu:")
+        lines.extend(errors[:10])
 
-    elif text == "/test":
-        send_telegram_message("✅ Bot çalışıyor kral.")
-
-    else:
-        send_telegram_message(
-            "Komut tanınmadı.\n"
-            "Kullan:\n"
-            "/start\n"
-            "/maclar\n"
-            "/test"
-        )
+    await update.message.reply_text("\n".join(lines))
 
 
+async def btts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ Attı mı yedi mi sistemi çalışıyor...")
+
+    matches, errors = get_upcoming_matches()
+
+    if not matches:
+        mesaj = "⚠️ Analiz için yaklaşan maç bulunamadı."
+        if errors:
+            mesaj += "\n\n⚠️ Hatalar:\n" + "\n".join(errors[:10])
+        await update.message.reply_text(mesaj)
+        return
+
+    analizlar = []
+    scan_list = matches[:MAX_MATCHES_TO_ANALYZE]
+
+    for match_item in scan_list:
+        analiz = mac_btts_analiz(match_item)
+        analizlar.append(analiz)
+
+    mesaj = btts_mesaj_olustur(analizlar)
+
+    hata_olanlar = [a for a in analizlar if a.get("hata")]
+    if hata_olanlar:
+        mesaj += "\n\n⚠️ Analiz hataları:"
+        for h in hata_olanlar[:5]:
+            mesaj += f"\n- {h['mac']}: {h['hata']}"
+
+    await update.message.reply_text(mesaj)
+
+
+# =========================
+# MAIN
+# =========================
 def main():
-    global LAST_UPDATE_ID
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN yok")
+    if not API_KEY:
+        raise ValueError("API_KEY yok")
 
-    validate_env()
-    log("Bot komut bekliyor...")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Eski birikmiş mesajları temizle
-    updates = get_updates()
-    if updates:
-        LAST_UPDATE_ID = updates[-1]["update_id"] + 1
-        log(f"Eski update'ler temizlendi. Yeni offset: {LAST_UPDATE_ID}")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("test", test))
+    app.add_handler(CommandHandler("maclar", maclar))
+    app.add_handler(CommandHandler("btts", btts))
 
-    while True:
-        try:
-            updates = get_updates(LAST_UPDATE_ID)
-
-            for update in updates:
-                LAST_UPDATE_ID = update["update_id"] + 1
-
-                message = update.get("message", {})
-                text = message.get("text", "")
-                chat_id = message.get("chat", {}).get("id")
-
-                log(f"Gelen mesaj: {text} | chat_id={chat_id}")
-
-                handle_message(text, chat_id)
-
-            time.sleep(POLL_SLEEP_SECONDS)
-
-        except Exception as e:
-            log(f"Ana döngü hatası: {e}")
-            log(traceback.format_exc())
-            time.sleep(5)
+    app.run_polling()
 
 
 if __name__ == "__main__":
