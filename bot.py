@@ -1,13 +1,17 @@
 import os
 import time
+import uuid
 import requests
 import datetime
 import traceback
 from zoneinfo import ZoneInfo
 
-API_KEY = os.getenv("API_KEY", "").strip() or "c8f938501ce71a7c49814d19848bd858"
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip() or "8484634033:AAFh84p9869S4v2-g8tCDxYVjMG6ALTBgog"
-CHAT_ID = os.getenv("CHAT_ID", "").strip() or "6878869943"
+# =========================
+# AYARLAR
+# =========================
+API_KEY = os.getenv("API_KEY", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {"X-Auth-Token": API_KEY}
