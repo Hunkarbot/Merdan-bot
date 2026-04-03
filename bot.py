@@ -5,9 +5,9 @@ import datetime
 import traceback
 from zoneinfo import ZoneInfo
 
-API_KEY = os.getenv("API_KEY", "").strip() or "BURAYA_FOOTBALL_DATA_TOKEN"
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip() or "BURAYA_TELEGRAM_BOT_TOKEN"
-CHAT_ID = os.getenv("CHAT_ID", "").strip() or "BURAYA_CHAT_ID"
+API_KEY = os.getenv("API_KEY", "").strip() or "c8f938501ce71a7c49814d19848bd858"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip() or "8484634033:AAFh84p9869S4v2-g8tCDxYVjMG6ALTBgog"
+CHAT_ID = os.getenv("CHAT_ID", "").strip() or "6878869943"
 
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {"X-Auth-Token": API_KEY}
