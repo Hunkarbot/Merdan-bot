@@ -1,10 +1,23 @@
 import os
+import sys
 import time
 import uuid
 import requests
 import datetime
 import traceback
 from zoneinfo import ZoneInfo
+
+# =========================
+# TEK ÇALIŞMA KİLİDİ
+# =========================
+LOCK_FILE = "/tmp/hunkar_bot.lock"
+
+if os.path.exists(LOCK_FILE):
+    print("Bot zaten çalışıyor, çıkıyorum.", flush=True)
+    sys.exit()
+
+with open(LOCK_FILE, "w") as f:
+    f.write("running")
 
 # =========================
 # AYARLAR
@@ -17,41 +30,37 @@ BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {"X-Auth-Token": API_KEY}
 TZ = ZoneInfo("Europe/Berlin")
 
-# İstediğin ligler
 COMP_CODES = ["BL1", "BL2", "PL", "ELC", "DED", "PPL", "SA", "PD"]
 
-# API dostu küçük bekleme
-REQUEST_SLEEP_SECONDS = 1.2
-
-# Aynı çalışmayı ayırt etmek için
+REQUEST_SLEEP_SECONDS = 1.5
 RUN_ID = str(uuid.uuid4())[:8]
 
+def cleanup_lock():
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except Exception as e:
+        print(f"Lock silinemedi: {e}", flush=True)
 
-# =========================
-# YARDIMCI FONKSİYONLAR
-# =========================
-def log(msg: str):
+def log(msg):
     now = datetime.datetime.now(TZ).strftime("%d.%m %H:%M:%S")
     print(f"[{now}] [RUN:{RUN_ID}] {msg}", flush=True)
 
-
-def send_telegram_message(text: str) -> bool:
+def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": text[:4000],
     }
-
     try:
         r = requests.post(url, data=payload, timeout=20)
         log(f"Telegram status: {r.status_code}")
         if r.status_code != 200:
-            log(f"Telegram raw: {r.text[:500]}")
+            log(f"Telegram raw: {r.text[:300]}")
         return r.status_code == 200
     except Exception as e:
         log(f"Telegram hata: {e}")
         return False
-
 
 def validate_env():
     if not API_KEY:
@@ -61,13 +70,12 @@ def validate_env():
     if not CHAT_ID:
         raise ValueError("CHAT_ID boş")
 
+def env_fingerprint():
+    api_part = API_KEY[:4] if API_KEY else "BOS"
+    bot_part = BOT_TOKEN[:8] if BOT_TOKEN else "BOS"
+    return f"api={api_part} bot={bot_part}"
 
-def get_matches_for_comp(comp_code: str, date_from: str, date_to: str) -> tuple[list, str | None]:
-    """
-    Dönen değer:
-    - matches: liste
-    - error: None ise sorun yok, string ise hata özeti
-    """
+def get_matches_for_comp(comp_code, date_from, date_to):
     url = f"{BASE_URL}/competitions/{comp_code}/matches"
     params = {
         "dateFrom": date_from,
@@ -84,50 +92,23 @@ def get_matches_for_comp(comp_code: str, date_from: str, date_to: str) -> tuple[
             log(f"{comp_code} maç sayısı: {len(matches)}")
             return matches, None
 
-        # API hatası varsa "maç yok" gibi davranma
-        raw = r.text[:300]
-        log(f"{comp_code} raw: {raw}")
+        log(f"{comp_code} raw: {r.text[:200]}")
         return [], f"{comp_code}: HTTP {r.status_code}"
 
     except requests.RequestException as e:
         log(f"{comp_code} istek hatası: {e}")
         return [], f"{comp_code}: istek hatası"
+
     except Exception as e:
         log(f"{comp_code} bilinmeyen hata: {e}")
         return [], f"{comp_code}: bilinmeyen hata"
 
-
-def format_match(m: dict) -> str:
-    comp = m.get("competition", {}).get("name", "Lig")
-    home = m.get("homeTeam", {}).get("name", "Home")
-    away = m.get("awayTeam", {}).get("name", "Away")
-    utc_date = m.get("utcDate", "")
-    status = m.get("status", "-")
-
-    try:
-        dt = datetime.datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
-        local_dt = dt.astimezone(TZ).strftime("%d.%m %H:%M")
-    except Exception:
-        local_dt = utc_date
-
-    return f"{local_dt} | {comp} | {home} - {away} | {status}"
-
-
-def format_matches(matches: list, limit: int = 20) -> str:
-    return "\n".join(format_match(m) for m in matches[:limit])
-
-
-def deduplicate_matches(matches: list) -> list:
-    """
-    Aynı maçı iki kez eklememek için.
-    football-data match id varsa onu baz alıyoruz.
-    """
+def deduplicate_matches(matches):
     seen = set()
     unique = []
 
     for m in matches:
-        match_id = m.get("id")
-        key = match_id if match_id is not None else (
+        key = m.get("id") or (
             m.get("utcDate", ""),
             m.get("homeTeam", {}).get("name", ""),
             m.get("awayTeam", {}).get("name", "")
@@ -139,22 +120,37 @@ def deduplicate_matches(matches: list) -> list:
 
     return unique
 
+def format_matches(matches, limit=20):
+    lines = []
 
-# =========================
-# ANA AKIŞ
-# =========================
+    for m in matches[:limit]:
+        comp = m.get("competition", {}).get("name", "Lig")
+        home = m.get("homeTeam", {}).get("name", "Home")
+        away = m.get("awayTeam", {}).get("name", "Away")
+        utc_date = m.get("utcDate", "")
+        status = m.get("status", "-")
+
+        try:
+            dt = datetime.datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
+            local_dt = dt.astimezone(TZ).strftime("%d.%m %H:%M")
+        except Exception:
+            local_dt = utc_date
+
+        lines.append(f"{local_dt} | {comp} | {home} - {away} | {status}")
+
+    return "\n".join(lines)
+
 def main():
     try:
         validate_env()
+
+        log(f"START | {env_fingerprint()}")
 
         today = datetime.datetime.now(TZ).date()
         tomorrow = today + datetime.timedelta(days=1)
 
         date_from = today.strftime("%Y-%m-%d")
         date_to = tomorrow.strftime("%Y-%m-%d")
-
-        log(f"Başladı. Aralık: {date_from} -> {date_to}")
-        log(f"Ligler: {', '.join(COMP_CODES)}")
 
         all_matches = []
         errors = []
@@ -173,30 +169,24 @@ def main():
         all_matches = deduplicate_matches(all_matches)
         all_matches.sort(key=lambda x: x.get("utcDate", ""))
 
-        # 1) Hiç maç yok + hata da yok => gerçekten maç yok
-        if not all_matches and not errors:
-            msg = (
-                f"RUN:{RUN_ID}\n"
-                f"⚠️ Seçilen liglerde bugün/yarın maç bulunamadı.\n"
-                f"Aralık: {date_from} → {date_to}\n"
-                f"Ligler: {', '.join(COMP_CODES)}"
-            )
-            send_telegram_message(msg)
-            return
-
-        # 2) Hiç maç yok + hata var => API / erişim sorunu
         if not all_matches and errors:
-            msg = (
+            send_telegram_message(
                 f"RUN:{RUN_ID}\n"
                 f"❌ Maç listesi alınamadı.\n"
                 f"Aralık: {date_from} → {date_to}\n"
                 f"Hatalar:\n- " + "\n- ".join(errors[:8])
             )
-            send_telegram_message(msg)
             return
 
-        # 3) Maç var => özet mesaj
-        summary = (
+        if not all_matches:
+            send_telegram_message(
+                f"RUN:{RUN_ID}\n"
+                f"⚠️ Seçilen liglerde bugün/yarın maç bulunamadı.\n"
+                f"Aralık: {date_from} → {date_to}"
+            )
+            return
+
+        msg = (
             f"RUN:{RUN_ID}\n"
             f"✅ Toplam {len(all_matches)} maç bulundu\n"
             f"Aralık: {date_from} → {date_to}\n"
@@ -204,11 +194,10 @@ def main():
             f"{format_matches(all_matches, 20)}"
         )
 
-        # İstersen ufak hata özetini alta ekleriz
         if errors:
-            summary += "\n\n⚠️ Bazı liglerde hata oldu:\n- " + "\n- ".join(errors[:5])
+            msg += "\n\n⚠️ Bazı liglerde hata oldu:\n- " + "\n- ".join(errors[:5])
 
-        send_telegram_message(summary)
+        send_telegram_message(msg)
 
     except Exception as e:
         err = (
@@ -219,6 +208,8 @@ def main():
         log(err)
         send_telegram_message(err[:4000])
 
+    finally:
+        cleanup_lock()
 
 if __name__ == "__main__":
     main()
