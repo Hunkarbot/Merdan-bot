@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 API_KEY = os.getenv("API_KEY")
@@ -9,31 +9,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 TZ = ZoneInfo("Europe/Berlin")
-
 ODD_BASE = "https://data.oddalerts.com/api"
 TG_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 LAST_UPDATE_ID = None
-
-
-TIPICO_LIGLER = [
-    "Bundesliga", "2. Bundesliga",
-    "Premier League", "Championship",
-    "La Liga", "Serie A", "Ligue 1",
-    "Eredivisie", "Eerste Divisie",
-    "Belgium", "Pro League",
-    "Austria", "Switzerland",
-    "Super League",
-    "Portugal", "MLS", "A-League",
-    "Norway", "Sweden", "Denmark",
-    "Turkey", "Super Lig"
-]
-
-KISIR_LIGLER = [
-    "Ethiopia", "Kenya", "Tanzania",
-    "Morocco", "Tunisia", "Algeria",
-    "Egypt", "Uganda", "Rwanda"
-]
 
 
 def tg_send(text):
@@ -42,7 +21,7 @@ def tg_send(text):
             f"{TG_BASE}/sendMessage",
             json={
                 "chat_id": CHAT_ID,
-                "text": text,
+                "text": text[:3900],
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True
             },
@@ -52,11 +31,29 @@ def tg_send(text):
         print("Telegram hata:", e)
 
 
+def odd_get(path, params=None):
+    params = params or {}
+    params["api_token"] = API_KEY
+
+    try:
+        r = requests.get(f"{ODD_BASE}{path}", params=params, timeout=30)
+        print("ODD URL:", r.url)
+        print("ODD STATUS:", r.status_code)
+        print("ODD TEXT:", r.text[:500])
+
+        if r.status_code != 200:
+            return None
+
+        return r.json()
+    except Exception as e:
+        print("OddAlerts hata:", e)
+        return None
+
+
 def get_updates():
     global LAST_UPDATE_ID
 
     params = {"timeout": 25}
-
     if LAST_UPDATE_ID is not None:
         params["offset"] = LAST_UPDATE_ID + 1
 
@@ -68,77 +65,13 @@ def get_updates():
         return []
 
     updates = data.get("result", [])
-
     if updates:
         LAST_UPDATE_ID = updates[-1]["update_id"]
 
     return updates
 
 
-def odd_get(path, params=None):
-    params = params or {}
-    params["api_token"] = API_KEY
-
-    try:
-        r = requests.get(f"{ODD_BASE}{path}", params=params, timeout=30)
-
-        print("ODD URL:", r.url)
-        print("ODD STATUS:", r.status_code)
-
-        if r.status_code != 200:
-            print("ODD ERROR:", r.text[:500])
-            return None
-
-        return r.json()
-
-    except Exception as e:
-        print("OddAlerts hata:", e)
-        return None
-
-
-def get_value(obj, keys, default=""):
-    if not isinstance(obj, dict):
-        return default
-
-    for key in keys:
-        if key in obj and obj[key] is not None:
-            return obj[key]
-
-    return default
-
-
-def to_float(x):
-    try:
-        if x is None or x == "":
-            return None
-        return float(str(x).replace("%", "").strip())
-    except:
-        return None
-
-
-def lig_tipico_uygun_mu(league):
-    league = str(league)
-
-    if any(x.lower() in league.lower() for x in KISIR_LIGLER):
-        return False
-
-    if any(x.lower() in league.lower() for x in TIPICO_LIGLER):
-        return True
-
-    return False
-
-
-def get_btts_trends():
-    data = odd_get(
-        "/trends/btts",
-        {
-            "minStat": 70,
-            "maxStat": 100,
-            "duration": 86400,
-            "sort": "time"
-        }
-    )
-
+def extract_list(data):
     if not data:
         return []
 
@@ -146,106 +79,209 @@ def get_btts_trends():
         return data
 
     if isinstance(data, dict):
-        return data.get("data") or data.get("results") or data.get("trends") or []
+        for key in ["data", "fixtures", "matches", "results", "trends", "predictions"]:
+            val = data.get(key)
+            if isinstance(val, list):
+                return val
 
     return []
 
 
-def analiz_et(match):
-    home = get_value(match, ["home_name", "home", "home_team", "localteam_name"], "Home")
-    away = get_value(match, ["away_name", "away", "away_team", "visitorteam_name"], "Away")
-    league = get_value(match, ["league_name", "league", "competition_name"], "Lig yok")
-    start = get_value(match, ["start_time", "kickoff", "date", "time"], "")
+def val(obj, keys, default=""):
+    if not isinstance(obj, dict):
+        return default
 
-    if not lig_tipico_uygun_mu(league):
+    for k in keys:
+        if k in obj and obj[k] not in [None, ""]:
+            return obj[k]
+
+    return default
+
+
+def num(x):
+    try:
+        if x in [None, ""]:
+            return None
+        return float(str(x).replace("%", "").strip())
+    except:
         return None
 
-    btts = to_float(get_value(match, ["stat", "btts", "btts_percentage", "percentage"], None))
-    over25 = to_float(get_value(match, ["over_25", "over25", "over25_percentage"], None))
+
+def get_team_names(m):
+    home = val(m, ["home_name", "home", "home_team", "localteam_name", "homeTeam"], "Home")
+    away = val(m, ["away_name", "away", "away_team", "visitorteam_name", "awayTeam"], "Away")
+    league = val(m, ["league_name", "league", "competition_name", "competition"], "Lig yok")
+    start = val(m, ["start_time", "kickoff", "date", "time", "starting_at"], "")
+    return home, away, league, start
+
+
+def goal_band_analysis(m):
+    home, away, league, start = get_team_names(m)
+
+    avg_goals = num(val(m, ["avg_goals", "average_goals", "goals_avg", "total_goals_avg"], None))
+    over25 = num(val(m, ["over25", "over_25", "over25_percentage", "over_25_percentage"], None))
+    btts = num(val(m, ["btts", "btts_percentage", "btts_yes_percentage", "stat", "percentage"], None))
 
     score = 0
     reasons = []
 
-    if btts is not None:
-        if btts >= 90:
-            score += 45
-            reasons.append(f"BTTS çok güçlü: %{btts}")
-        elif btts >= 80:
+    if avg_goals is not None:
+        if avg_goals >= 3.2:
             score += 35
-            reasons.append(f"BTTS güçlü: %{btts}")
-        elif btts >= 70:
+            reasons.append(f"Gol ortalaması yüksek: {avg_goals}")
+        elif avg_goals >= 2.6:
             score += 25
-            reasons.append(f"BTTS uygun: %{btts}")
+            reasons.append(f"Gol ortalaması iyi: {avg_goals}")
+        elif avg_goals <= 2.0:
+            score -= 20
+            reasons.append(f"Gol ortalaması düşük: {avg_goals}")
 
-    if over25 is not None and over25 >= 65:
+    if over25 is not None:
+        if over25 >= 75:
+            score += 30
+            reasons.append(f"2.5 üst güçlü: %{over25}")
+        elif over25 >= 60:
+            score += 18
+            reasons.append(f"2.5 üst destekli: %{over25}")
+
+    if btts is not None:
+        if btts >= 75:
+            score += 25
+            reasons.append(f"BTTS güçlü: %{btts}")
+        elif btts >= 60:
+            score += 12
+            reasons.append(f"BTTS destekli: %{btts}")
+
+    gollu_ligler = ["Bundesliga", "Eredivisie", "Belgium", "Austria", "Switzerland", "MLS", "A-League"]
+    kisir_ligler = ["Egypt", "Morocco", "Tunisia", "Algeria", "Kenya", "Tanzania", "Ethiopia"]
+
+    if any(x.lower() in str(league).lower() for x in gollu_ligler):
         score += 15
-        reasons.append(f"2.5 üst desteği: %{over25}")
-
-    if any(x.lower() in str(league).lower() for x in [
-        "Eredivisie", "Bundesliga", "Belgium",
-        "Austria", "Switzerland", "MLS", "A-League"
-    ]):
-        score += 20
         reasons.append("Gollü lig bonusu")
 
-    if score < 45:
-        return None
+    if any(x.lower() in str(league).lower() for x in kisir_ligler):
+        score -= 20
+        reasons.append("Kısır lig riski")
 
-    if score >= 80:
-        market = "BTTS JA güçlü"
-    elif score >= 60:
-        market = "BTTS JA aday"
+    if score >= 75:
+        band = "3-5 gol"
+        market = "2.5 ÜST / BTTS+ÜST"
+        scenario = "2-1 / 3-1 / 3-2"
+    elif score >= 55:
+        band = "2-4 gol"
+        market = "1.5 ÜST ana, 2.5 ÜST aday"
+        scenario = "1-1 / 2-1 / 2-2"
+    elif score >= 30:
+        band = "2-3 gol"
+        market = "1.5 ÜST + 3.5 ALT"
+        scenario = "1-1 / 2-0 / 2-1"
     else:
-        market = "BTTS izlenir"
+        band = "0-2 gol"
+        market = "2.5 ALT / HT 0-0 izlenir"
+        scenario = "0-0 / 1-0 / 1-1"
 
     return {
         "home": home,
         "away": away,
         "league": league,
         "start": start,
-        "btts": btts,
-        "over25": over25,
-        "score": score,
+        "score": max(0, min(100, score)),
+        "band": band,
         "market": market,
+        "scenario": scenario,
         "reasons": reasons[:4]
     }
 
 
+def debug_oddalerts():
+    today = datetime.now(TZ).date()
+    tomorrow = today + timedelta(days=1)
+
+    tests = [
+        ("/fixtures", {}),
+        ("/fixtures", {"date": str(today)}),
+        ("/fixtures", {"from": str(today), "to": str(tomorrow)}),
+        ("/trends/btts", {"minStat": 1, "maxStat": 100, "duration": 604800}),
+        ("/trends/over25", {"minStat": 1, "maxStat": 100, "duration": 604800}),
+        ("/predictions", {}),
+    ]
+
+    lines = ["🧪 <b>OddAlerts API Debug</b>"]
+
+    for path, params in tests:
+        data = odd_get(path, params)
+        items = extract_list(data)
+
+        if isinstance(data, dict):
+            keys = list(data.keys())[:8]
+        elif isinstance(data, list) and data:
+            keys = list(data[0].keys())[:8]
+        else:
+            keys = []
+
+        lines.append(
+            f"\n<b>{path}</b>\n"
+            f"Count: {len(items)}\n"
+            f"Keys: {keys}"
+        )
+
+    tg_send("\n".join(lines))
+
+
+def get_matches():
+    today = datetime.now(TZ).date()
+    tomorrow = today + timedelta(days=1)
+
+    endpoints = [
+        ("/fixtures", {"from": str(today), "to": str(tomorrow)}),
+        ("/fixtures", {"date": str(today)}),
+        ("/trends/over25", {"minStat": 1, "maxStat": 100, "duration": 604800}),
+        ("/trends/btts", {"minStat": 1, "maxStat": 100, "duration": 604800}),
+        ("/predictions", {}),
+    ]
+
+    for path, params in endpoints:
+        data = odd_get(path, params)
+        items = extract_list(data)
+
+        if items:
+            print("DATA FOUND:", path, len(items))
+            return items, path
+
+    return [], "none"
+
+
 def maclari_analiz_et():
-    matches = get_btts_trends()
+    matches, source = get_matches()
 
     if not matches:
-        tg_send("⚠️ OddAlerts BTTS trend verisi boş döndü kral.")
+        tg_send("⚠️ OddAlerts veri boş döndü kral. /debug yaz, hangi endpoint veri veriyor görelim.")
         return
 
-    picks = []
-
+    analizler = []
     for m in matches:
-        analiz = analiz_et(m)
-        if analiz:
-            picks.append(analiz)
+        analizler.append(goal_band_analysis(m))
 
-    picks = sorted(picks, key=lambda x: x["score"], reverse=True)
+    analizler = sorted(analizler, key=lambda x: x["score"], reverse=True)
 
     msg = []
-    msg.append("🔥 <b>MERDAN BOT — TIPICO BTTS ADAYLARI</b>")
+    msg.append("🔥 <b>MERDAN BOT — GOL BANDI ANALİZİ</b>")
     msg.append(f"🕒 {datetime.now(TZ).strftime('%d.%m.%Y %H:%M')}")
-    msg.append(f"📊 Taranan trend: {len(matches)}")
-    msg.append(f"🎯 Filtre geçen: {len(picks)}")
+    msg.append(f"📡 Kaynak: {source}")
+    msg.append(f"📊 Taranan maç: {len(matches)}")
     msg.append("")
 
-    if not picks:
-        msg.append("Bugün Tipico aday liglerden güçlü BTTS çıkmadı kral.")
-    else:
-        for i, p in enumerate(picks[:12], 1):
-            msg.append(
-                f"{i}) <b>{p['home']} - {p['away']}</b>\n"
-                f"🏆 {p['league']}\n"
-                f"⏰ {p['start']}\n"
-                f"🎯 <b>{p['market']}</b>\n"
-                f"🔥 Güç: {p['score']}/100\n"
-                f"📌 {' | '.join(p['reasons'])}\n"
-            )
+    for i, p in enumerate(analizler[:12], 1):
+        msg.append(
+            f"{i}) <b>{p['home']} - {p['away']}</b>\n"
+            f"🏆 {p['league']}\n"
+            f"⏰ {p['start']}\n"
+            f"⚽ Gol bandı: <b>{p['band']}</b>\n"
+            f"🎯 Yön: <b>{p['market']}</b>\n"
+            f"📌 Skor senaryosu: {p['scenario']}\n"
+            f"🔥 Güç: {p['score']}/100\n"
+            f"🧠 {' | '.join(p['reasons']) if p['reasons'] else 'Veri sınırlı'}\n"
+        )
 
     tg_send("\n".join(msg))
 
@@ -256,25 +292,28 @@ def handle_message(text):
     if text in ["/start", "start"]:
         tg_send(
             "✅ Merdan Bot aktif kral.\n\n"
-            "Komutlar:\n"
-            "/maclar — BTTS aday maçları getirir\n"
-            "/test — bot testi"
+            "/maclar — gol bandı analiz\n"
+            "/debug — OddAlerts endpoint test\n"
+            "/test — bağlantı testi"
         )
 
     elif text in ["/test", "test"]:
-        tg_send("✅ Test başarılı kral. Bot ayakta.")
+        tg_send("✅ Test başarılı kral.")
+
+    elif text in ["/debug", "debug"]:
+        tg_send("🧪 OddAlerts endpointleri test ediliyor kral...")
+        debug_oddalerts()
 
     elif text in ["/maclar", "maclar", "/analiz", "analiz"]:
         tg_send("⏳ Maçları tarıyorum kral...")
         maclari_analiz_et()
 
     else:
-        tg_send("Kral komut: /maclar")
+        tg_send("Komut: /maclar veya /debug")
 
 
 def check_env():
     missing = []
-
     if not API_KEY:
         missing.append("API_KEY")
     if not BOT_TOKEN:
@@ -295,7 +334,7 @@ def main():
     if not check_env():
         return
 
-    print("Bot hazır. Spam yok. Komut bekleniyor.")
+    print("Bot hazır. Komut bekleniyor.")
 
     while True:
         updates = get_updates()
@@ -309,7 +348,7 @@ def main():
                 continue
 
             if text:
-                print("Komut geldi:", text)
+                print("Komut:", text)
                 handle_message(text)
 
         time.sleep(2)
